@@ -10,6 +10,7 @@ from app.main import app
 
 NOW = datetime(2026, 10, 27, tzinfo=UTC)
 ICP_ID = uuid4()
+WORKSPACE_ID = uuid4()
 COMPANY_ID = uuid4()
 
 ICP_ROW = {
@@ -65,14 +66,17 @@ class FakeLeadIntelRepo:
 
 class FakeIcpProfileRepo:
     def __init__(self) -> None:
-        self.saved: dict[UUID, SimpleNamespace] = {}
+        self.saved: dict[tuple[UUID, UUID], SimpleNamespace] = {}
 
-    async def get_many(self, icp_ids):
-        return {i: self.saved[i] for i in icp_ids if i in self.saved}
+    async def workspace_exists(self, workspace_id):
+        return workspace_id == WORKSPACE_ID
 
-    async def upsert(self, icp_id, values):
-        self.saved[icp_id] = SimpleNamespace(lead_intel_icp_id=icp_id, updated_at=NOW, **values)
-        return self.saved[icp_id]
+    async def get_many(self, workspace_id, icp_ids):
+        return {i: self.saved[(workspace_id, i)] for i in icp_ids if (workspace_id, i) in self.saved}
+
+    async def upsert(self, workspace_id, icp_id, values):
+        self.saved[(workspace_id, icp_id)] = SimpleNamespace(lead_intel_icp_id=icp_id, updated_at=NOW, **values)
+        return self.saved[(workspace_id, icp_id)]
 
 
 @pytest.fixture

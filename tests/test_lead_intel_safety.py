@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from app.db.engine import to_async_url
 from app.db.lead_intel import lead_intel_metadata
-from app.db.models import OUTREACH_SCHEMA, Base
+from app.db.models import OUTREACH_SCHEMA, TABLE_PREFIX, Base
 
 ROOT = Path(__file__).resolve().parents[1]
 LEAD_INTEL_TABLES = {t.name for t in lead_intel_metadata.sorted_tables} | {
@@ -19,8 +19,13 @@ def test_our_models_live_only_in_outreach_schema() -> None:
     assert Base.metadata.tables, "expected at least one outreach table"
     for table in Base.metadata.tables.values():
         assert table.schema == OUTREACH_SCHEMA
+        assert table.name.startswith(TABLE_PREFIX), f"{table.name} must start with {TABLE_PREFIX}"
         assert table.name not in LEAD_INTEL_TABLES
-        assert not table.foreign_keys, f"{table.name} must not reference Lead Intel tables"
+        for fk in table.foreign_keys:
+            target = fk.column.table
+            assert target.schema == OUTREACH_SCHEMA and target.name.startswith(TABLE_PREFIX), (
+                f"{table.name} references {target.fullname}; foreign keys may only point at our own eo_ tables"
+            )
 
 
 def test_lead_intel_tables_are_not_in_alembic_metadata() -> None:
@@ -35,6 +40,14 @@ def test_migrations_only_touch_outreach_schema() -> None:
         for call in re.findall(r"op\.\w+\(\s*['\"](\w+)['\"]", source):
             assert call not in LEAD_INTEL_TABLES, f"{path.name} touches Lead Intel table {call}"
         assert "public." not in source, f"{path.name} mentions the public schema"
+
+
+def test_migrations_only_create_eo_tables() -> None:
+    for path in (ROOT / "migrations" / "versions").glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        for name in re.findall(r"op\.(?:create_table|drop_table|add_column|alter_column|drop_column|create_index|drop_index)\(\s*['\"](\w+)['\"]", source):
+            assert name.startswith(TABLE_PREFIX), f"{path.name} touches {name}, which isn't an {TABLE_PREFIX} table"
+    assert 'version_table="eo_alembic_version"' in (ROOT / "migrations" / "env.py").read_text(encoding="utf-8")
 
 
 def test_lead_intel_repo_never_writes() -> None:

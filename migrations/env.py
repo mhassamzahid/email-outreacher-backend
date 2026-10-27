@@ -5,7 +5,7 @@ away from them:
   1. target_metadata is this service's models only; Lead Intel's tables are not in it.
   2. include_name / include_object drop every schema and object outside `outreach`, so
      autogenerate never even sees Lead Intel's tables (and so can never propose dropping them).
-  3. Alembic's own version table lives in `outreach` too.
+  3. Alembic's own version table lives in `outreach` too, as `eo_alembic_version`.
 """
 
 import asyncio
@@ -46,6 +46,7 @@ def _configure(connection=None, url=None) -> None:
         include_schemas=True,
         include_name=include_name,
         include_object=include_object,
+        version_table="eo_alembic_version",
         version_table_schema=OUTREACH_SCHEMA,
         literal_binds=connection is None,
     )

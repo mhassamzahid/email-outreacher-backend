@@ -1,4 +1,4 @@
-"""outreach.icp_profiles
+"""outreach.eo_icp_profiles
 
 Revision ID: 0001
 Revises:
@@ -20,7 +20,7 @@ depends_on = None
 def upgrade() -> None:
     op.execute("create schema if not exists outreach")
     op.create_table(
-        "icp_profiles",
+        "eo_icp_profiles",
         # Lead Intel's icps.id. Deliberately no foreign key: see app/db/models.py.
         sa.Column("lead_intel_icp_id", sa.Uuid(), primary_key=True),
         sa.Column("description", sa.Text(), nullable=False, server_default=""),
@@ -44,4 +44,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("icp_profiles", schema="outreach")
+    op.drop_table("eo_icp_profiles", schema="outreach")

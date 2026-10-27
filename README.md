@@ -22,7 +22,7 @@ This service shares Lead Intel's Supabase database. **Lead Intel's tables are re
 - Lead Intel tables (`public.icps`, `businesses`, `field_metadata`, `identity_keys`) are read
   through `app/repositories/lead_intel.py`, inside `SET TRANSACTION READ ONLY`, so Postgres rejects
   any write.
-- This service's own tables live in the `outreach` schema. Alembic only ever sees that schema,
+- This service's own tables live in the `outreach` schema and every one starts with `eo_`. Alembic only ever sees that schema,
   and `tests/test_lead_intel_safety.py` fails if a migration or the read repo reaches outside it.
 - No foreign keys point at Lead Intel tables, so its deletes and merges behave exactly as before.
 
@@ -42,7 +42,7 @@ Check the connection and that Lead Intel still has every column we read:
 |---|---|---|
 | GET | `/api/v1/icps` | Lead Intel ICPs with company counts and the outreach profile |
 | GET | `/api/v1/icps/{id}` | One ICP |
-| PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP (writes `outreach.icp_profiles` only) |
+| PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP (writes `outreach.eo_icp_profiles` only) |
 | GET | `/api/v1/icps/{id}/companies` | Contactable companies for an ICP (`q`, `limit`, `offset`) |
 | GET | `/api/v1/companies` | All contactable companies (`icpId`, `q`, `limit`, `offset`) |
 | GET | `/api/v1/companies/{id}` | One company with every stored field (website text, Instagram profile…) |
