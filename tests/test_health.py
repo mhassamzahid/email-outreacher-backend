@@ -19,6 +19,17 @@ def test_api_health() -> None:
     assert body["service"] == "Outreacher API"
 
 
+def test_database_routes_say_503_when_not_configured(monkeypatch) -> None:
+    from app.core.config import get_settings
+    from app.db.engine import get_engine
+
+    monkeypatch.setattr(get_settings(), "database_url", None)
+    get_engine.cache_clear()
+    response = client.get("/api/v1/icps")
+    assert response.status_code == 503
+    get_engine.cache_clear()
+
+
 def test_cors_allows_frontend_origin() -> None:
     response = client.options(
         "/api/v1/health",
