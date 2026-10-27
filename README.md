@@ -9,7 +9,7 @@ python -m venv .venv
 .venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env              # fill in what you need
-uvicorn app.main:app --reload --port 8000
+uvicorn main:app --reload
 ```
 
 - API docs: http://localhost:8000/docs
@@ -20,7 +20,7 @@ uvicorn app.main:app --reload --port 8000
 This service shares Lead Intel's Supabase database. **Lead Intel's tables are read-only here.**
 
 - Lead Intel tables (`public.icps`, `businesses`, `field_metadata`, `identity_keys`) are read
-  through `app/repositories/lead_intel.py`, inside `SET TRANSACTION READ ONLY`, so Postgres rejects
+  through `lead_intel.py`, inside `SET TRANSACTION READ ONLY`, so Postgres rejects
   any write.
 - This service's own tables live in the `outreach` schema and every one starts with `eo_`. Alembic only ever sees that schema,
   and `tests/test_lead_intel_safety.py` fails if a migration or the read repo reaches outside it.
@@ -47,6 +47,15 @@ Check the connection and that Lead Intel still has every column we read:
 | GET | `/api/v1/companies` | All contactable companies (`icpId`, `q`, `limit`, `offset`) |
 | GET | `/api/v1/companies/{id}` | One company with every stored field (website text, Instagram profile…) |
 
+| GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
+| GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |
+| POST | `/api/v1/leads` | Add one lead by hand; 409 if it's a duplicate |
+| POST | `/api/v1/leads/import` | Import a CSV sent as the body (`Content-Type: text/csv`); `icpId`, `dryRun` |
+
+Lead endpoints need an `X-Workspace-Id` header until sign-in exists. A lead needs an email or a
+LinkedIn URL. Duplicates within a workspace are caught by email, then LinkedIn URL, then company
+domain plus full name; the database's unique indexes on email and LinkedIn URL are the final check.
+
 "Contactable" means `status = active` and not excluded. Merged and do-not-contact businesses are
 never returned.
 
@@ -59,16 +68,17 @@ pytest
 ## Layout
 
 ```
-app/
-  main.py             app factory, CORS, router mounting
-  core/config.py      settings from environment variables
-  api/router.py       /api/v1 router; add feature routers here
-  api/routes/         one module per feature
-  db/lead_intel.py    Lead Intel tables (read-only descriptions)
-  db/models.py        our tables, `outreach` schema
-  repositories/       queries
-  schemas/            request/response models (camelCase on the wire)
-migrations/           Alembic, fenced to the `outreach` schema
+main.py           the app: CORS, /api/v1 router list
+config.py         settings from environment variables
+database.py       engine, read-only connection, sessions
+models.py         our tables (`outreach.eo_*`)
+lead_intel.py     everything that reads Lead Intel; nothing in it writes
+crud.py           reads and writes for our tables
+schemas.py        request/response models (camelCase on the wire)
+dependencies.py   FastAPI dependencies (repos, workspace header)
+routers/          one module per feature
+services/         logic with no database (CSV parsing, dedupe)
+migrations/       Alembic, fenced to the `outreach` schema
 tests/
 ```
 

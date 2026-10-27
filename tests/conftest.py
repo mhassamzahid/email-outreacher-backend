@@ -5,8 +5,8 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_icp_profile_repo, get_lead_intel_repo
-from app.main import app
+from dependencies import get_icp_profile_repo, get_lead_intel_repo
+from main import app
 
 NOW = datetime(2026, 10, 27, tzinfo=UTC)
 ICP_ID = uuid4()

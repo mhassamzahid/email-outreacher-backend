@@ -2,10 +2,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import get_icp_profile_repo, get_lead_intel_repo, get_workspace_id, require_workspace_id
-from app.repositories.icp_profiles import IcpProfileRepo
-from app.repositories.lead_intel import LeadIntelRepo
-from app.schemas.icps import Icp, IcpProfileIn, IcpProfileOut
+from crud import IcpProfileRepo
+from dependencies import get_icp_profile_repo, get_lead_intel_repo, get_workspace_id, require_workspace_id
+from lead_intel import LeadIntelRepo
+from schemas import Icp, IcpProfileIn, IcpProfileOut
+
 
 router = APIRouter(prefix="/icps", tags=["icps"])
 

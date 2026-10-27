@@ -1,12 +1,86 @@
-"""SELECT-only queries against Lead Intel's tables. Nothing in this module writes."""
+"""Lead Intel's tables, described for reading only.
+
+These tables belong to Lead Intel and must never be written, altered or migrated from here.
+Everything that touches Lead Intel is in this file, and nothing in it writes. The tables live in
+their own MetaData, which Alembic never sees, and every query against them runs in a READ ONLY
+transaction (see get_readonly_conn in database.py). Only the columns this service reads are listed.
+"""
 
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Text, and_, cast, func, select
+from sqlalchemy import (
+    ARRAY,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    MetaData,
+    SmallInteger,
+    Table,
+    Text,
+    and_,
+    cast,
+    func,
+    select,
+)
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.db.lead_intel import businesses, field_metadata, icps, identity_keys
+
+lead_intel_metadata = MetaData(schema="public")
+
+icps = Table(
+    "icps",
+    lead_intel_metadata,
+    Column("id", PG_UUID(as_uuid=True), primary_key=True),
+    Column("name", Text),
+    Column("industry", Text),
+    Column("priority", Integer),
+    Column("enabled", Boolean),
+    Column("search_terms", ARRAY(Text)),
+    Column("places", ARRAY(Text)),
+    Column("created_at", DateTime(timezone=True)),
+    Column("updated_at", DateTime(timezone=True)),
+)
+
+businesses = Table(
+    "businesses",
+    lead_intel_metadata,
+    Column("id", PG_UUID(as_uuid=True), primary_key=True),
+    Column("status", Text),
+    Column("display_name", Text),
+    Column("website_status", Text),
+    Column("city", Text),
+    Column("state", Text),
+    Column("country", Text),
+    Column("exclusion_flag", Boolean),
+    Column("problem_score", Float),
+    Column("tier", SmallInteger),
+    Column("icp_id", PG_UUID(as_uuid=True)),
+    Column("icp_name", Text),
+    Column("created_at", DateTime(timezone=True)),
+)
+
+field_metadata = Table(
+    "field_metadata",
+    lead_intel_metadata,
+    Column("business_id", PG_UUID(as_uuid=True)),
+    Column("field_name", Text),
+    Column("value", Text),
+    Column("source_name", Text),
+    Column("last_verified_at", DateTime(timezone=True)),
+)
+
+identity_keys = Table(
+    "identity_keys",
+    lead_intel_metadata,
+    Column("business_id", PG_UUID(as_uuid=True)),
+    Column("key_type", Text),
+    Column("key_value", Text),
+)
+
 
 # The fields shown on every company row. Everything else is only returned on the detail view.
 LIST_FIELDS = (

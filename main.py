@@ -1,8 +1,18 @@
-from fastapi import FastAPI
+"""Entry point. Run with: uvicorn main:app --reload"""
+
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.router import api_router
-from app.core.config import get_settings
+from config import get_settings
+from routers import companies, health, icps, leads
+
+
+# Every feature router is included here, under /api/v1.
+api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(health.router)
+api_router.include_router(icps.router)
+api_router.include_router(companies.router)
+api_router.include_router(leads.router)
 
 
 def create_app() -> FastAPI:

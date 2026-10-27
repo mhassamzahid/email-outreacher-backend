@@ -3,10 +3,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import get_lead_intel_repo
-from app.repositories.lead_intel import LeadIntelRepo
-from app.schemas.base import Page
-from app.schemas.companies import Company, CompanyDetail, Instagram
+from dependencies import get_lead_intel_repo
+from lead_intel import LeadIntelRepo
+from schemas import Company, CompanyDetail, Instagram, Page
+
 
 router = APIRouter(tags=["companies"])
 

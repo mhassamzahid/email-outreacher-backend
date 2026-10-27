@@ -1,10 +1,15 @@
+"""Database connections: the engine, a read-only connection for Lead Intel, and sessions for our tables."""
+
+from collections.abc import AsyncIterator
 from functools import lru_cache
 from uuid import uuid4
 
+from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from app.core.config import get_settings
+from config import get_settings
 
 
 class DatabaseNotConfigured(RuntimeError):
@@ -46,3 +51,30 @@ def get_engine() -> AsyncEngine:
 @lru_cache
 def get_sessionmaker() -> async_sessionmaker:
     return async_sessionmaker(get_engine(), expire_on_commit=False)
+
+
+async def get_readonly_conn() -> AsyncIterator[AsyncConnection]:
+    """A connection whose transaction Postgres itself refuses to write in.
+
+    Every read of Lead Intel's tables goes through here, so even a bug cannot change them.
+    """
+    try:
+        engine = get_engine()
+    except DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    async with engine.connect() as conn:
+        await conn.execute(text("SET TRANSACTION READ ONLY"))
+        try:
+            yield conn
+        finally:
+            await conn.rollback()
+
+
+async def get_session() -> AsyncIterator[AsyncSession]:
+    """A read-write session, for this service's own tables in the `outreach` schema."""
+    try:
+        sessionmaker = get_sessionmaker()
+    except DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    async with sessionmaker() as session:
+        yield session

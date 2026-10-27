@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.main import app
+from main import app
 
 client = TestClient(app)
 
@@ -20,8 +20,8 @@ def test_api_health() -> None:
 
 
 def test_database_routes_say_503_when_not_configured(monkeypatch) -> None:
-    from app.core.config import get_settings
-    from app.db.engine import get_engine
+    from config import get_settings
+    from database import get_engine
 
     monkeypatch.setattr(get_settings(), "database_url", None)
     get_engine.cache_clear()

@@ -4,9 +4,9 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.db.engine import to_async_url
-from app.db.lead_intel import lead_intel_metadata
-from app.db.models import OUTREACH_SCHEMA, TABLE_PREFIX, Base
+from database import to_async_url
+from lead_intel import lead_intel_metadata
+from models import OUTREACH_SCHEMA, TABLE_PREFIX, Base
 
 ROOT = Path(__file__).resolve().parents[1]
 LEAD_INTEL_TABLES = {t.name for t in lead_intel_metadata.sorted_tables} | {
@@ -51,7 +51,7 @@ def test_migrations_only_create_eo_tables() -> None:
 
 
 def test_lead_intel_repo_never_writes() -> None:
-    source = (ROOT / "app" / "repositories" / "lead_intel.py").read_text(encoding="utf-8")
+    source = (ROOT / "lead_intel.py").read_text(encoding="utf-8")
     for word in ("insert(", "update(", "delete(", ".commit(", "INSERT ", "UPDATE ", "DELETE ", "ALTER ", "DROP "):
         assert word not in source
 

@@ -15,9 +15,9 @@ from alembic import context
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.core.config import get_settings
-from app.db.engine import to_async_url
-from app.db.models import OUTREACH_SCHEMA, Base
+from config import get_settings
+from database import to_async_url
+from models import OUTREACH_SCHEMA, Base
 
 config = context.config
 if config.config_file_name:

@@ -31,6 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+
 OUTREACH_SCHEMA = "outreach"
 TABLE_PREFIX = "eo_"
 

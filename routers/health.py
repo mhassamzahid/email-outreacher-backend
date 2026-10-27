@@ -3,9 +3,10 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.core.config import Settings, get_settings
-from app.db.lead_intel import lead_intel_metadata
-from app.db.session import get_readonly_conn
+from config import Settings, get_settings
+from database import get_readonly_conn
+from lead_intel import lead_intel_metadata
+
 
 router = APIRouter(tags=["health"])
 
