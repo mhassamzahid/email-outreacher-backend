@@ -29,8 +29,9 @@ class FakeApollo:
         return [FoundPerson("ap1", "Ava", "Mo***n", "Owner", True, "Glow", {}),
                 FoundPerson("ap2", "Liam", "Ca***r", "Founder", False, "Glow", {})], 12  # fmt: skip
 
-    async def reveal(self, apollo_id):
+    async def reveal(self, apollo_id=None, linkedin_url=None):
         self.reveals += 1
+        self.revealed_by = linkedin_url or apollo_id
         if apollo_id == "ap2":
             return None
         return RevealedPerson(apollo_id, "Ava", "Morgan", "Owner", "owner", "ava@glowmedspa.com", "verified",
@@ -68,6 +69,24 @@ class FakeStakeholders:
                 new += 1
         return new
 
+    async def save_employees(self, ws, company_id, people):
+        new = 0
+        for p in people:
+            if not any(r.external_id == p.external_id for r in self.rows.values()):
+                row = SimpleNamespace(
+                    id=uuid4(), workspace_id=ws, lead_intel_business_id=company_id, lead_intel_icp_id=None,
+                    organization_name=p.company_name, source="apify_linkedin", external_id=p.external_id,
+                    first_name=p.first_name, last_name=p.last_name, title=p.title, seniority=None,
+                    linkedin_url=p.linkedin_url, has_email=None, email=None, email_status=None, revealed_at=None,
+                    lead_id=None, found_at=datetime.now(UTC),
+                )  # fmt: skip
+                self.rows[row.id] = row
+                new += 1
+        return new
+
+    async def link_lead(self, s, lead_id):
+        s.lead_id = lead_id
+
     async def save_revealed(self, s, person, lead_id):
         s.revealed_at = datetime.now(UTC)
         s.lead_id = lead_id
@@ -81,7 +100,7 @@ class FakeCalls:
     def __init__(self) -> None:
         self.records: list[tuple] = []
 
-    async def record(self, ws, provider, endpoint, status, *, key=None, lead_id=None, credits=None):
+    async def record(self, ws, provider, endpoint, status, *, key=None, lead_id=None, credits=None, cost_usd=None):
         self.records.append((provider, endpoint, status))
 
 
@@ -94,7 +113,7 @@ def apollo_env(client, workspace_companies, monkeypatch):
     app.dependency_overrides[get_session] = lambda: None
     leads_made = []
 
-    async def fake_lead(session, ws, icp_id, company_id, lead, apollo_id, email_status):
+    async def fake_lead(session, ws, icp_id, company_id, lead, apollo_id, email_status, origin="apollo"):
         leads_made.append(lead)
         return uuid4(), True
 

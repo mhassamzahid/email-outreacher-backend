@@ -57,6 +57,10 @@ Check the connection and that Lead Intel still has every column we read:
 | POST | `/api/v1/stakeholders/search` | Apollo People Search by company domain, `{companyIds, titles, seniorities}`; 0 credits |
 | POST | `/api/v1/stakeholders/search-icp` | Apollo People Search for a Lead Intel ICP, anywhere: titles, seniorities, company locations, keywords, size, verified-email only, `page`/`perPage` (max 100); 0 credits |
 | POST | `/api/v1/stakeholders/reveal` | Apollo enrichment for `{stakeholderIds}` (max 25): email + LinkedIn, adds them as leads; ~1 credit each, never twice |
+| POST | `/api/v1/stakeholders/search-linkedin` | People at companies on LinkedIn via Apify (`harvestapi~linkedin-company-employees`), full names + LinkedIn, no emails; ~$0.004/person |
+| POST | `/api/v1/stakeholders/add-as-leads` | Turn found people with a LinkedIn URL or email into leads; free |
+| GET | `/api/v1/posts` | Fetched posts (`leadId`) |
+| POST | `/api/v1/posts/fetch` | Recent LinkedIn (`harvestapi~linkedin-profile-posts`) and Instagram (`apify~instagram-scraper`) posts for up to 25 leads; Instagram falls back to the company's account from Lead Intel |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |
 | POST | `/api/v1/leads` | Add one lead by hand; 409 if it's a duplicate |

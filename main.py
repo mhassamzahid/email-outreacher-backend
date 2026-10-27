@@ -4,7 +4,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
-from routers import companies, health, icps, leads, stakeholders, workspaces
+from routers import companies, health, icps, leads, posts, stakeholders, workspaces
 
 
 # Every feature router is included here, under /api/v1.
@@ -15,6 +15,7 @@ api_router.include_router(companies.router)
 api_router.include_router(leads.router)
 api_router.include_router(workspaces.router)
 api_router.include_router(stakeholders.router)
+api_router.include_router(posts.router)
 
 
 def create_app() -> FastAPI:

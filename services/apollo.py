@@ -143,15 +143,21 @@ class ApolloClient:
         ]
         return people, int(body.get("total_entries") or len(people))
 
-    async def reveal(self, apollo_id: str) -> RevealedPerson | None:
-        """Full name, work email and LinkedIn for one person. Costs credits when data comes back."""
-        body = await self._post("/people/match", [("id", apollo_id), ("reveal_personal_emails", "false")])
+    async def reveal(self, apollo_id: str | None = None, *, linkedin_url: str | None = None) -> RevealedPerson | None:
+        """Full name, work email and LinkedIn for one person, by Apollo id or LinkedIn URL.
+
+        Costs credits when data comes back.
+        """
+        if not apollo_id and not linkedin_url:
+            raise ValueError("Pass an Apollo id or a LinkedIn URL")
+        who = [("id", apollo_id)] if apollo_id else [("linkedin_url", linkedin_url)]
+        body = await self._post("/people/match", [*who, ("reveal_personal_emails", "false")])
         p = body.get("person")
         if not p or p.get("match_confidence") == "none":
             return None
         org = p.get("organization") or {}
         return RevealedPerson(
-            apollo_id=p.get("id") or apollo_id,
+            apollo_id=p.get("id") or apollo_id or "",
             first_name=p.get("first_name") or "",
             last_name=p.get("last_name") or "",
             title=p.get("title") or "",

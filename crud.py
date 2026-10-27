@@ -8,7 +8,8 @@ from sqlalchemy import case, delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import IcpProfile, Lead, ProviderCall, Stakeholder, Workspace, WorkspaceCompany
+from models import IcpProfile, Lead, Post, ProviderCall, Stakeholder, Workspace, WorkspaceCompany
+from services.apify import Employee, FetchedPost
 from services.apollo import FoundPerson, RevealedPerson
 from services.leads import Existing, LeadInput
 
@@ -299,6 +300,54 @@ class StakeholderRepo:
         await self.session.commit()
         return sum(p.apollo_id not in known for p in people)
 
+    async def save_employees(self, workspace_id: UUID, company_id: UUID, people: list[Employee]) -> int:
+        """Add people found on LinkedIn (via Apify) and refresh known ones; returns how many were new.
+
+        Unlike an Apollo search these come with full names and a LinkedIn URL, but no email.
+        """
+        if not people:
+            return 0
+        known = set(
+            await self.session.scalars(
+                select(Stakeholder.external_id).where(
+                    Stakeholder.workspace_id == workspace_id,
+                    Stakeholder.source == "apify_linkedin",
+                    Stakeholder.external_id.in_([p.external_id for p in people]),
+                )
+            )
+        )
+        for p in people:
+            statement = insert(Stakeholder).values(
+                workspace_id=workspace_id,
+                lead_intel_business_id=company_id,
+                source="apify_linkedin",
+                external_id=p.external_id,
+                first_name=p.first_name,
+                last_name=p.last_name,
+                title=p.title,
+                linkedin_url=p.linkedin_url,
+                organization_name=p.company_name,
+                raw=p.raw,
+            )
+            statement = statement.on_conflict_do_update(
+                index_elements=[Stakeholder.workspace_id, Stakeholder.source, Stakeholder.external_id],
+                set_={
+                    "title": statement.excluded.title,
+                    "linkedin_url": func.coalesce(statement.excluded.linkedin_url, Stakeholder.linkedin_url),
+                    "organization_name": func.coalesce(statement.excluded.organization_name, Stakeholder.organization_name),
+                    "lead_intel_business_id": func.coalesce(
+                        statement.excluded.lead_intel_business_id, Stakeholder.lead_intel_business_id
+                    ),
+                },
+            )
+            await self.session.execute(statement)
+        await self.session.commit()
+        return sum(p.external_id not in known for p in people)
+
+    async def link_lead(self, stakeholder: Stakeholder, lead_id: UUID) -> None:
+        stakeholder.lead_id = lead_id
+        await self.session.commit()
+
     async def save_revealed(self, stakeholder: Stakeholder, person: RevealedPerson | None, lead_id: UUID | None) -> None:
         stakeholder.revealed_at = func.now()
         if person is None:
@@ -334,6 +383,7 @@ class ProviderCallRepo:
         key: str | None = None,
         lead_id: UUID | None = None,
         credits: float | None = None,
+        cost_usd: float | None = None,
     ) -> None:
         await self.session.execute(
             insert(ProviderCall)
@@ -345,6 +395,7 @@ class ProviderCallRepo:
                 endpoint=endpoint,
                 status=status,
                 credits=credits,
+                cost_usd=cost_usd or 0,
             )
             .on_conflict_do_nothing()
         )
@@ -353,7 +404,7 @@ class ProviderCallRepo:
 
 async def lead_from_stakeholder(
     session: AsyncSession, workspace_id: UUID, icp_id: UUID | None, company_id: UUID | None, lead: LeadInput, apollo_id: str,
-    email_status: str | None,
+    email_status: str | None, origin: str = "apollo",
 ) -> tuple[UUID | None, bool]:  # fmt: skip
     """The lead for a revealed person: created, or the existing one with the same email or LinkedIn.
 
@@ -374,7 +425,7 @@ async def lead_from_stakeholder(
             website=lead.website,
             domain=lead.domain or None,
             linkedin_url=lead.linkedin_url or None,
-            origin="apollo",
+            origin=origin,
             external_id=apollo_id,
         )
         .on_conflict_do_nothing()
@@ -393,3 +444,49 @@ async def lead_from_stakeholder(
         return None, False
     existing = await session.scalar(select(Lead.id).where(Lead.workspace_id == workspace_id, or_(*matches)).limit(1))
     return existing, False
+
+
+class PostRepo:
+    """Leads' recent posts. Writes `outreach.eo_posts`, and the lead's status once its posts are in."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def leads(self, workspace_id: UUID, lead_ids: list[UUID]) -> list[Lead]:
+        query = select(Lead).where(Lead.workspace_id == workspace_id, Lead.id.in_(lead_ids))
+        return list(await self.session.scalars(query))
+
+    async def save(self, workspace_id: UUID, lead_id: UUID, posts: list[FetchedPost]) -> int:
+        """Store posts a lead doesn't have yet (same URL = same post); returns how many were new."""
+        new = 0
+        for p in posts:
+            statement = (
+                insert(Post)
+                .values(
+                    workspace_id=workspace_id,
+                    lead_id=lead_id,
+                    source=p.source,
+                    url=p.url,
+                    external_id=p.external_id,
+                    posted_at=p.posted_at,
+                    text=p.text,
+                    media_type=p.media_type,
+                    is_repost=p.is_repost,
+                    raw=p.raw,
+                )
+                .on_conflict_do_nothing()
+                .returning(Post.id)
+            )
+            new += (await self.session.execute(statement)).scalar_one_or_none() is not None
+        await self.session.commit()
+        return new
+
+    async def set_status(self, lead: Lead, status: str) -> None:
+        lead.status = status
+        await self.session.commit()
+
+    async def list(self, workspace_id: UUID, lead_id: UUID | None) -> list[Post]:
+        query = select(Post).where(Post.workspace_id == workspace_id)
+        if lead_id:
+            query = query.where(Post.lead_id == lead_id)
+        return list(await self.session.scalars(query.order_by(Post.posted_at.desc().nulls_last(), Post.id)))

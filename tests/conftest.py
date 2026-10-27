@@ -54,6 +54,7 @@ COMPANY_ROW = {
         "website_url": "https://glowmedspa.com",
         "instagram_handle": "glowmedspa",
         "instagram_followers": "4210",
+        "instagram_url": "https://www.instagram.com/glowmedspa/",
         "website_text": "Botox and fillers in Austin.",
     },
 }

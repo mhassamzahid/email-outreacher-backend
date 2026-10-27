@@ -286,8 +286,29 @@ class CompanySearchResult(ApiModel):
 
 class StakeholderSearchResult(ApiModel):
     results: list[CompanySearchResult]
-    # Set when Apollo refused (bad key, plan, rate limit); the rest weren't searched.
+    # Set when the provider refused (bad key, plan, rate limit, credit); the rest weren't searched.
     error: str | None = None
+    # What the provider charged, when it says (Apify does; Apollo searches are free).
+    cost_usd: float | None = None
+
+
+class LinkedInSearchIn(ApiModel):
+    """Find people at companies on LinkedIn (Apify). Paid per profile; no emails."""
+
+    company_ids: list[UUID] = Field(min_length=1, max_length=10)
+    titles: list[str] = Field(default=[], max_length=30)
+    max_per_company: int = Field(default=10, ge=1, le=50)
+
+
+class AddAsLeadsIn(ApiModel):
+    stakeholder_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+class AddAsLeadsResult(ApiModel):
+    added: int
+    # Already a lead (same email or LinkedIn), now linked to it.
+    linked_existing: int
+    skipped: int
 
 
 class IcpSearchIn(ApiModel):
@@ -331,3 +352,38 @@ class StakeholderRevealResult(ApiModel):
     outcomes: list[RevealOutcome]
     revealed: int
     error: str | None = None
+
+
+# ---------- Posts ----------
+
+
+class PostFetchIn(ApiModel):
+    lead_ids: list[UUID] = Field(min_length=1, max_length=25)
+    max_posts: int = Field(default=5, ge=1, le=20)
+    max_age_days: int = Field(default=60, ge=1, le=365)
+
+
+class LeadPostsResult(ApiModel):
+    lead_id: UUID
+    # Posts found per source; null when the lead has no URL for it.
+    linkedin: int | None
+    instagram: int | None
+    new: int
+
+
+class PostFetchResult(ApiModel):
+    results: list[LeadPostsResult]
+    cost_usd: float | None
+    error: str | None = None
+
+
+class PostOut(ApiModel):
+    id: UUID
+    lead_id: UUID
+    source: str
+    url: str
+    posted_at: datetime | None
+    text: str
+    media_type: str
+    is_repost: bool
+    fetched_at: datetime
