@@ -1,13 +1,15 @@
 """Reads and writes for our own `outreach.eo_` tables. Lead Intel is read in lead_intel.py, never here."""
 
+from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select, tuple_
+from sqlalchemy import case, delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import IcpProfile, Lead, Workspace
+from models import IcpProfile, Lead, ProviderCall, Stakeholder, Workspace, WorkspaceCompany
+from services.apollo import FoundPerson, RevealedPerson
 from services.leads import Existing, LeadInput
 
 
@@ -138,3 +140,243 @@ class LeadRepo:
             select(Lead).where(*where).order_by(Lead.created_at.desc(), Lead.id).limit(limit).offset(offset)
         )
         return list(rows), total
+
+
+class WorkspaceCompanyRepo:
+    """Which Lead Intel companies are in a workspace. Reads and writes `outreach.eo_workspace_companies` only."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def workspace_exists(self, workspace_id: UUID) -> bool:
+        return (await self.session.get(Workspace, workspace_id)) is not None
+
+    async def imported(self, workspace_id: UUID) -> dict[UUID, datetime]:
+        rows = await self.session.execute(
+            select(WorkspaceCompany.lead_intel_business_id, WorkspaceCompany.imported_at).where(
+                WorkspaceCompany.workspace_id == workspace_id
+            )
+        )
+        return dict(rows.tuples().all())
+
+    async def add(self, workspace_id: UUID, company_ids: list[UUID]) -> int:
+        """Adds the ones not already there; returns how many were new."""
+        if not company_ids:
+            return 0
+        statement = (
+            insert(WorkspaceCompany)
+            .values([{"workspace_id": workspace_id, "lead_intel_business_id": cid} for cid in dict.fromkeys(company_ids)])
+            .on_conflict_do_nothing()
+            .returning(WorkspaceCompany.lead_intel_business_id)
+        )
+        added = len((await self.session.execute(statement)).all())
+        await self.session.commit()
+        return added
+
+    async def remove(self, workspace_id: UUID, company_ids: list[UUID]) -> int:
+        statement = (
+            delete(WorkspaceCompany)
+            .where(WorkspaceCompany.workspace_id == workspace_id, WorkspaceCompany.lead_intel_business_id.in_(company_ids))
+            .returning(WorkspaceCompany.lead_intel_business_id)
+        )
+        removed = len((await self.session.execute(statement)).all())
+        await self.session.commit()
+        return removed
+
+
+class WorkspaceRepo:
+    """Reads and writes `outreach.eo_workspaces` only.
+
+    Deleting a workspace also deletes everything it owns in our `eo_` tables (their foreign keys
+    cascade). Lead Intel is never touched: workspaces only ever point at it.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list(self) -> list[Workspace]:
+        return list(await self.session.scalars(select(Workspace).order_by(Workspace.created_at, Workspace.name)))
+
+    async def get(self, workspace_id: UUID) -> Workspace | None:
+        return await self.session.get(Workspace, workspace_id)
+
+    async def name_taken(self, name: str, except_id: UUID | None = None) -> bool:
+        query = select(Workspace.id).where(func.lower(Workspace.name) == name.lower())
+        if except_id:
+            query = query.where(Workspace.id != except_id)
+        return (await self.session.scalar(query)) is not None
+
+    async def create(self, name: str, description: str) -> Workspace:
+        workspace = Workspace(name=name, description=description)
+        self.session.add(workspace)
+        await self.session.commit()
+        await self.session.refresh(workspace)
+        return workspace
+
+    async def update(self, workspace: Workspace, values: dict[str, Any]) -> Workspace:
+        for key, value in values.items():
+            setattr(workspace, key, value)
+        await self.session.commit()
+        await self.session.refresh(workspace)
+        return workspace
+
+    async def delete(self, workspace: Workspace) -> None:
+        await self.session.delete(workspace)
+        await self.session.commit()
+
+
+class StakeholderRepo:
+    """People found at a company, before and after their email is revealed. `outreach.eo_stakeholders`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list(self, workspace_id: UUID, company_id: UUID | None = None) -> list[Stakeholder]:
+        query = select(Stakeholder).where(Stakeholder.workspace_id == workspace_id)
+        if company_id:
+            query = query.where(Stakeholder.lead_intel_business_id == company_id)
+        return list(await self.session.scalars(query.order_by(Stakeholder.found_at.desc(), Stakeholder.id)))
+
+    async def get_many(self, workspace_id: UUID, ids: list[UUID]) -> list[Stakeholder]:
+        query = select(Stakeholder).where(Stakeholder.workspace_id == workspace_id, Stakeholder.id.in_(ids))
+        return list(await self.session.scalars(query))
+
+    async def save_found(self, workspace_id: UUID, company_id: UUID, people: list[FoundPerson]) -> int:
+        """Add new search hits and refresh known ones; returns how many were new.
+
+        A person who was already revealed keeps their full name and email: search results only
+        carry a masked last name and must not overwrite what was paid for.
+        """
+        if not people:
+            return 0
+        known = set(
+            await self.session.scalars(
+                select(Stakeholder.external_id).where(
+                    Stakeholder.workspace_id == workspace_id,
+                    Stakeholder.source == "apollo",
+                    Stakeholder.external_id.in_([p.apollo_id for p in people]),
+                )
+            )
+        )
+        for p in people:
+            statement = insert(Stakeholder).values(
+                workspace_id=workspace_id,
+                lead_intel_business_id=company_id,
+                source="apollo",
+                external_id=p.apollo_id,
+                first_name=p.first_name,
+                last_name=p.last_name_masked,
+                title=p.title,
+                has_email=p.has_email,
+                raw=p.raw,
+            )
+            statement = statement.on_conflict_do_update(
+                index_elements=[Stakeholder.workspace_id, Stakeholder.source, Stakeholder.external_id],
+                set_={
+                    "title": statement.excluded.title,
+                    "has_email": statement.excluded.has_email,
+                    "lead_intel_business_id": statement.excluded.lead_intel_business_id,
+                    "raw": case((Stakeholder.revealed_at.is_(None), statement.excluded.raw), else_=Stakeholder.raw),
+                    "last_name": case(
+                        (Stakeholder.revealed_at.is_(None), statement.excluded.last_name), else_=Stakeholder.last_name
+                    ),
+                },
+            )
+            await self.session.execute(statement)
+        await self.session.commit()
+        return sum(p.apollo_id not in known for p in people)
+
+    async def save_revealed(self, stakeholder: Stakeholder, person: RevealedPerson | None, lead_id: UUID | None) -> None:
+        stakeholder.revealed_at = func.now()
+        if person is None:
+            # Apollo found no match and charged nothing; remember that so nobody pays to ask again.
+            stakeholder.email_status = "no_match"
+        else:
+            stakeholder.first_name = person.first_name or stakeholder.first_name
+            stakeholder.last_name = person.last_name
+            stakeholder.title = person.title or stakeholder.title
+            stakeholder.seniority = person.seniority
+            stakeholder.email = person.email
+            stakeholder.email_status = person.email_status
+            stakeholder.linkedin_url = person.linkedin_url
+            stakeholder.raw = person.raw
+        stakeholder.lead_id = lead_id
+        await self.session.commit()
+        await self.session.refresh(stakeholder)
+
+
+class ProviderCallRepo:
+    """The ledger of calls to paid providers. `outreach.eo_provider_calls`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def record(
+        self,
+        workspace_id: UUID,
+        provider: str,
+        endpoint: str,
+        status: str,
+        *,
+        key: str | None = None,
+        lead_id: UUID | None = None,
+        credits: float | None = None,
+    ) -> None:
+        await self.session.execute(
+            insert(ProviderCall)
+            .values(
+                idempotency_key=key or f"{provider}:{endpoint}:{uuid4()}",
+                workspace_id=workspace_id,
+                lead_id=lead_id,
+                provider=provider,
+                endpoint=endpoint,
+                status=status,
+                credits=credits,
+            )
+            .on_conflict_do_nothing()
+        )
+        await self.session.commit()
+
+
+async def lead_from_stakeholder(
+    session: AsyncSession, workspace_id: UUID, icp_id: UUID | None, company_id: UUID, lead: LeadInput, apollo_id: str,
+    email_status: str | None,
+) -> tuple[UUID | None, bool]:  # fmt: skip
+    """The lead for a revealed person: created, or the existing one with the same email or LinkedIn.
+
+    Returns (lead id, whether it was created). The unique indexes decide what counts as the same person.
+    """
+    statement = (
+        insert(Lead)
+        .values(
+            workspace_id=workspace_id,
+            lead_intel_icp_id=icp_id,
+            lead_intel_business_id=company_id,
+            first_name=lead.first_name,
+            last_name=lead.last_name,
+            email=lead.email or None,
+            email_status=email_status,
+            title=lead.title,
+            company=lead.company,
+            website=lead.website,
+            domain=lead.domain or None,
+            linkedin_url=lead.linkedin_url or None,
+            origin="apollo",
+            external_id=apollo_id,
+        )
+        .on_conflict_do_nothing()
+        .returning(Lead.id)
+    )
+    created = (await session.execute(statement)).scalar_one_or_none()
+    await session.commit()
+    if created:
+        return created, True
+    matches = []
+    if lead.email:
+        matches.append(func.lower(Lead.email) == lead.email)
+    if lead.linkedin_url:
+        matches.append(func.lower(Lead.linkedin_url) == lead.linkedin_url.lower())
+    if not matches:
+        return None, False
+    existing = await session.scalar(select(Lead.id).where(Lead.workspace_id == workspace_id, or_(*matches)).limit(1))
+    return existing, False

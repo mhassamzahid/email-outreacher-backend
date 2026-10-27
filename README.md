@@ -40,13 +40,21 @@ Check the connection and that Lead Intel still has every column we read:
 
 | Method | Path | |
 |---|---|---|
+| GET | `/api/v1/workspaces` | All workspaces |
+| POST | `/api/v1/workspaces` | Create one (`{name, description}`); 409 if the name is taken (ignoring case) |
+| PATCH | `/api/v1/workspaces/{id}` | Rename or change the description |
+| DELETE | `/api/v1/workspaces/{id}` | Delete it and everything it owns in our `eo_` tables; refuses the last one |
 | GET | `/api/v1/icps` | Lead Intel ICPs with company counts and the outreach profile |
 | GET | `/api/v1/icps/{id}` | One ICP |
 | PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP (writes `outreach.eo_icp_profiles` only) |
 | GET | `/api/v1/icps/{id}/companies` | Contactable companies for an ICP (`q`, `limit`, `offset`) |
-| GET | `/api/v1/companies` | All contactable companies (`icpId`, `q`, `limit`, `offset`) |
+| GET | `/api/v1/companies` | Contactable Lead Intel companies (`icpId`, `noIcp`, `inWorkspace`, `q`, `limit`, `offset`); with `X-Workspace-Id` each has `importedAt` |
+| POST | `/api/v1/companies/import` | Pull Lead Intel companies into a workspace: `{companyIds}` or `{icpId}` (writes `eo_workspace_companies` only) |
+| POST | `/api/v1/companies/remove` | Take companies out of a workspace (`{companyIds}`); Lead Intel keeps them |
 | GET | `/api/v1/companies/{id}` | One company with every stored field (website text, Instagram profile…) |
-
+| GET | `/api/v1/stakeholders` | People found at the workspace's companies (`companyId`) |
+| POST | `/api/v1/stakeholders/search` | Apollo People Search by company domain, `{companyIds, titles, seniorities}`; 0 credits |
+| POST | `/api/v1/stakeholders/reveal` | Apollo enrichment for `{stakeholderIds}` (max 25): email + LinkedIn, adds them as leads; ~1 credit each, never twice |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |
 | POST | `/api/v1/leads` | Add one lead by hand; 409 if it's a duplicate |

@@ -120,6 +120,18 @@ class WorkspaceMember(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class WorkspaceCompany(Base):
+    """A Lead Intel business pulled into a workspace. Only the link is stored; the company stays in Lead Intel."""
+
+    __tablename__ = "eo_workspace_companies"
+
+    workspace_id: Mapped[UUID] = mapped_column(ForeignKey("eo_workspaces.id", ondelete="CASCADE"), primary_key=True)
+    # Lead Intel's businesses.id. No foreign key, see module docstring.
+    lead_intel_business_id: Mapped[UUID] = mapped_column(primary_key=True, index=True)
+    imported_by: Mapped[UUID | None] = _user_ref()
+    imported_at: Mapped[datetime] = _created()
+
+
 # ---------- Settings and prompts ----------
 
 

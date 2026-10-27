@@ -1,11 +1,14 @@
+from collections.abc import AsyncIterator
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
-from crud import IcpProfileRepo, LeadRepo
+from config import get_settings
+from crud import IcpProfileRepo, LeadRepo, ProviderCallRepo, StakeholderRepo, WorkspaceCompanyRepo, WorkspaceRepo
 from database import get_readonly_conn, get_session
 from lead_intel import LeadIntelRepo
+from services.apollo import ApolloClient
 
 
 def get_lead_intel_repo(conn: AsyncConnection = Depends(get_readonly_conn)) -> LeadIntelRepo:
@@ -29,3 +32,30 @@ def get_icp_profile_repo(session: AsyncSession = Depends(get_session)) -> IcpPro
 
 def get_lead_repo(session: AsyncSession = Depends(get_session)) -> LeadRepo:
     return LeadRepo(session)
+
+
+def get_workspace_company_repo(session: AsyncSession = Depends(get_session)) -> WorkspaceCompanyRepo:
+    return WorkspaceCompanyRepo(session)
+
+
+def get_workspace_repo(session: AsyncSession = Depends(get_session)) -> WorkspaceRepo:
+    return WorkspaceRepo(session)
+
+
+def get_stakeholder_repo(session: AsyncSession = Depends(get_session)) -> StakeholderRepo:
+    return StakeholderRepo(session)
+
+
+def get_provider_call_repo(session: AsyncSession = Depends(get_session)) -> ProviderCallRepo:
+    return ProviderCallRepo(session)
+
+
+async def get_apollo() -> AsyncIterator[ApolloClient]:
+    key = get_settings().apollo_api_key
+    if not key:
+        raise HTTPException(status_code=503, detail="APOLLO_API_KEY is not set")
+    client = ApolloClient(key)
+    try:
+        yield client
+    finally:
+        await client.aclose()

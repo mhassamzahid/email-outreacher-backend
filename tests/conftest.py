@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from dependencies import get_icp_profile_repo, get_lead_intel_repo
+from dependencies import get_icp_profile_repo, get_lead_intel_repo, get_workspace_company_repo
 from main import app
 
 NOW = datetime(2026, 10, 27, tzinfo=UTC)
@@ -56,9 +56,19 @@ class FakeLeadIntelRepo:
     async def get_icp(self, icp_id: UUID):
         return ICP_ROW if icp_id == ICP_ID else None
 
-    async def list_companies(self, icp_id, q, limit, offset):
-        rows = [COMPANY_ROW] if icp_id in (None, ICP_ID) else []
+    async def list_companies(self, icp_id, q, limit, offset, *, no_icp=False, only_ids=None, exclude_ids=None):
+        rows = [COMPANY_ROW] if icp_id in (None, ICP_ID) and not no_icp else []
+        if only_ids is not None:
+            rows = [r for r in rows if r["id"] in only_ids]
+        if exclude_ids:
+            rows = [r for r in rows if r["id"] not in exclude_ids]
         return rows, len(rows)
+
+    async def contactable_ids(self, ids=None, icp_id=None):
+        known = [COMPANY_ID]
+        if icp_id is not None:
+            known = known if icp_id == ICP_ID else []
+        return [i for i in known if ids is None or i in ids]
 
     async def get_company(self, company_id: UUID):
         return COMPANY_ROW if company_id == COMPANY_ID else None
@@ -79,14 +89,41 @@ class FakeIcpProfileRepo:
         return self.saved[(workspace_id, icp_id)]
 
 
+class FakeWorkspaceCompanyRepo:
+    def __init__(self) -> None:
+        self.links: dict[tuple[UUID, UUID], datetime] = {}
+
+    async def workspace_exists(self, workspace_id):
+        return workspace_id == WORKSPACE_ID
+
+    async def imported(self, workspace_id):
+        return {cid: at for (ws, cid), at in self.links.items() if ws == workspace_id}
+
+    async def add(self, workspace_id, company_ids):
+        new = [cid for cid in dict.fromkeys(company_ids) if (workspace_id, cid) not in self.links]
+        for cid in new:
+            self.links[(workspace_id, cid)] = NOW
+        return len(new)
+
+    async def remove(self, workspace_id, company_ids):
+        gone = [cid for cid in company_ids if self.links.pop((workspace_id, cid), None)]
+        return len(gone)
+
+
+@pytest.fixture
+def workspace_companies() -> FakeWorkspaceCompanyRepo:
+    return FakeWorkspaceCompanyRepo()
+
+
 @pytest.fixture
 def profiles() -> FakeIcpProfileRepo:
     return FakeIcpProfileRepo()
 
 
 @pytest.fixture
-def client(profiles: FakeIcpProfileRepo):
+def client(profiles: FakeIcpProfileRepo, workspace_companies: FakeWorkspaceCompanyRepo):
     app.dependency_overrides[get_lead_intel_repo] = FakeLeadIntelRepo
+    app.dependency_overrides[get_workspace_company_repo] = lambda: workspace_companies
     app.dependency_overrides[get_icp_profile_repo] = lambda: profiles
     yield TestClient(app)
     app.dependency_overrides.clear()

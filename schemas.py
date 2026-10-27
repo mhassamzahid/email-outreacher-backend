@@ -87,12 +87,36 @@ class Company(ApiModel):
     domain: str | None
     instagram: Instagram
     created_at: datetime
+    # When this company was pulled into the workspace in X-Workspace-Id; null if it isn't in it.
+    imported_at: datetime | None = None
 
 
 class CompanyDetail(Company):
     # Every stored field for the business (website text, Instagram profile, listing data...),
     # exactly as Lead Intel saved it.
     fields: dict[str, str | None]
+
+
+class CompanyImportIn(ApiModel):
+    """Either specific Lead Intel companies, or every contactable company in one Lead Intel ICP."""
+
+    company_ids: list[UUID] | None = Field(default=None, max_length=5000)
+    icp_id: UUID | None = None
+
+
+class CompanyImportResult(ApiModel):
+    imported: int
+    already_in_workspace: int
+    # Ids Lead Intel doesn't have, or that are excluded or merged and so can't be contacted.
+    not_found: list[UUID]
+
+
+class CompanyRemoveIn(ApiModel):
+    company_ids: list[UUID] = Field(min_length=1, max_length=5000)
+
+
+class CompanyRemoveResult(ApiModel):
+    removed: int
 
 
 # ---------- Leads ----------
@@ -157,3 +181,86 @@ class ImportResult(ApiModel):
     websites_from_email: int
     columns: list[ColumnMapping]
     rows: list[RowOutcome]
+
+
+# ---------- Workspaces ----------
+
+
+class WorkspaceIn(ApiModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+
+
+class WorkspaceUpdate(ApiModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+
+
+class WorkspaceOut(ApiModel):
+    id: UUID
+    name: str
+    description: str
+    created_at: datetime
+
+
+# ---------- Stakeholders (Apollo) ----------
+
+
+class StakeholderOut(ApiModel):
+    id: UUID
+    company_id: UUID | None = Field(validation_alias="lead_intel_business_id")
+    source: str
+    first_name: str
+    # Masked ("Hu***n") until the person is revealed.
+    last_name: str
+    title: str
+    seniority: str | None
+    linkedin_url: str | None
+    has_email: bool | None
+    email: str | None
+    email_status: str | None
+    revealed_at: datetime | None
+    lead_id: UUID | None
+    found_at: datetime
+
+
+class StakeholderSearchIn(ApiModel):
+    company_ids: list[UUID] = Field(min_length=1, max_length=25)
+    titles: list[str] = Field(default=[], max_length=30)
+    seniorities: list[str] = Field(default=[], max_length=11)
+
+
+class CompanySearchResult(ApiModel):
+    company_id: UUID
+    name: str | None
+    status: Literal["searched", "skipped", "failed"]
+    found: int = 0
+    new: int = 0
+    # How many people Apollo has in total for this search; we save the first page.
+    total_at_apollo: int | None = None
+    reason: str | None = None
+
+
+class StakeholderSearchResult(ApiModel):
+    results: list[CompanySearchResult]
+    # Set when Apollo refused (bad key, plan, rate limit); the rest weren't searched.
+    error: str | None = None
+
+
+class StakeholderRevealIn(ApiModel):
+    stakeholder_ids: list[UUID] = Field(min_length=1, max_length=25)
+
+
+class RevealOutcome(ApiModel):
+    stakeholder_id: UUID
+    status: Literal["revealed", "no_match", "already_revealed", "not_found", "failed"]
+    email: str | None = None
+    lead_id: UUID | None = None
+    lead_created: bool = False
+    reason: str | None = None
+
+
+class StakeholderRevealResult(ApiModel):
+    outcomes: list[RevealOutcome]
+    revealed: int
+    error: str | None = None

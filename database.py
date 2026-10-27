@@ -39,13 +39,18 @@ def get_engine() -> AsyncEngine:
     if not settings.database_url:
         raise DatabaseNotConfigured("DATABASE_URL is not set")
     url, connect_args = to_async_url(settings.database_url)
-    # Supabase's pooler (transaction mode) cannot keep prepared statements between transactions,
-    # so asyncpg's statement cache is off and every prepared statement gets a unique name.
+    # Supabase's pooler (transaction mode) cannot keep prepared statements between transactions.
+    # Both caches have to be off: asyncpg's own, and SQLAlchemy's (prepared_statement_cache_size);
+    # with either one on, a statement prepared on one server connection gets reused on another
+    # and fails with "prepared statement ... does not exist". Unique names avoid clashes.
+    url = make_url(url).update_query_dict({"prepared_statement_cache_size": "0"}).render_as_string(hide_password=False)
     connect_args |= {
         "statement_cache_size": 0,
         "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
     }
-    return create_async_engine(url, connect_args=connect_args, pool_pre_ping=True)
+    # A request can hold two connections at once (read-only for Lead Intel, read-write for ours),
+    # so the pool is sized for that. Supabase's pooler multiplexes these onto its own connections.
+    return create_async_engine(url, connect_args=connect_args, pool_pre_ping=True, pool_size=10, max_overflow=20)
 
 
 @lru_cache

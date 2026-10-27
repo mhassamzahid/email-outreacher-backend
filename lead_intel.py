@@ -129,11 +129,25 @@ class LeadIntelRepo:
         return dict(row) if row else None
 
     async def list_companies(
-        self, icp_id: UUID | None, q: str | None, limit: int, offset: int
+        self,
+        icp_id: UUID | None,
+        q: str | None,
+        limit: int,
+        offset: int,
+        *,
+        no_icp: bool = False,
+        only_ids: list[UUID] | None = None,
+        exclude_ids: list[UUID] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         where = [_contactable]
         if icp_id:
             where.append(businesses.c.icp_id == icp_id)
+        if no_icp:
+            where.append(businesses.c.icp_id.is_(None))
+        if only_ids is not None:
+            where.append(businesses.c.id.in_(only_ids))
+        if exclude_ids:
+            where.append(businesses.c.id.not_in(exclude_ids))
         if q:
             where.append(businesses.c.display_name.ilike(f"%{q}%"))
 
@@ -151,6 +165,17 @@ class LeadIntelRepo:
         companies = [dict(row) for row in rows]
         await self._attach_fields(companies, LIST_FIELDS)
         return companies, total
+
+    async def contactable_ids(self, ids: list[UUID] | None = None, icp_id: UUID | None = None) -> list[UUID]:
+        """Which of these ids (or every company in this ICP) exist and may be contacted."""
+        if ids is None and icp_id is None:
+            raise ValueError("Pass ids or an ICP")
+        query = select(businesses.c.id).where(_contactable)
+        if ids is not None:
+            query = query.where(businesses.c.id.in_(ids))
+        if icp_id is not None:
+            query = query.where(businesses.c.icp_id == icp_id)
+        return list((await self.conn.execute(query)).scalars())
 
     async def get_company(self, company_id: UUID) -> dict[str, Any] | None:
         row = (
