@@ -13,6 +13,8 @@ import httpx
 
 BASE_URL = "https://api.apollo.io/api/v1"
 
+EMAIL_STATUSES = ("verified", "unverified", "likely to engage", "unavailable")
+
 SENIORITIES = ("owner", "founder", "c_suite", "partner", "vp", "head", "director", "manager", "senior", "entry", "intern")
 
 
@@ -97,12 +99,34 @@ class ApolloClient:
         return response.json()
 
     async def search_people(
-        self, domain: str, titles: list[str], seniorities: list[str], per_page: int = 25
+        self,
+        domain: str | None,
+        titles: list[str],
+        seniorities: list[str],
+        per_page: int = 25,
+        *,
+        page: int = 1,
+        organization_locations: list[str] | None = None,
+        keywords: str | None = None,
+        employee_ranges: list[str] | None = None,
+        email_statuses: list[str] | None = None,
     ) -> tuple[list[FoundPerson], int]:
-        """People currently or previously at this company domain. 0 credits."""
-        params: list[tuple[str, str]] = [("q_organization_domains_list[]", domain), ("page", "1"), ("per_page", str(per_page))]
+        """People matching the filters: at one company domain, or anywhere that fits an ICP. 0 credits.
+
+        `employee_ranges` are "min,max" strings ("1,10"). `organization_locations` are cities, states,
+        countries or postcodes of the company's headquarters. `keywords` is free text; Apollo doesn't
+        say whether it matches the person or the company, so treat it as a broad filter.
+        """
+        params: list[tuple[str, str]] = [("page", str(page)), ("per_page", str(per_page))]
+        if domain:
+            params.append(("q_organization_domains_list[]", domain))
         params += [("person_titles[]", t) for t in titles]
         params += [("person_seniorities[]", s) for s in seniorities]
+        params += [("organization_locations[]", loc) for loc in organization_locations or []]
+        params += [("organization_num_employees_ranges[]", r) for r in employee_ranges or []]
+        params += [("contact_email_status[]", st) for st in email_statuses or []]
+        if keywords:
+            params.append(("q_keywords", keywords))
         body = await self._post("/mixed_people/api_search", params)
         people = [
             FoundPerson(

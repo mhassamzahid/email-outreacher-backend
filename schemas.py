@@ -24,9 +24,10 @@ class Page[T](ApiModel):
 # ---------- ICPs ----------
 
 class IcpProfileIn(ApiModel):
+    """This workspace's outreach settings for a Lead Intel ICP. The ICP itself stays in Lead Intel."""
+
     description: str = ""
     titles: list[str] = []
-    company_size: str = ""
     pains: str = ""
     offer: str = ""
     proof: str = ""
@@ -44,15 +45,55 @@ class IcpProfileOut(IcpProfileIn):
     updated_at: datetime
 
 
+ICP_SOURCES = (
+    "business_name", "website_text", "website_domain", "instagram_bio", "instagram_category", "instagram_handle",
+    "meta_ads_text",
+)  # fmt: skip
+
+
+class IcpCreateIn(ApiModel):
+    """A new ICP, with exactly Lead Intel's fields. Added to Lead Intel's icps table."""
+
+    name: str = Field(min_length=1, max_length=100)
+    industry: str = Field(min_length=1, max_length=100)
+    priority: int = Field(default=100, ge=0, le=10000)
+    enabled: bool = True
+    sources: list[str] = Field(default=[], max_length=len(ICP_SOURCES))
+    any_of: list[str] = Field(default=[], max_length=100)
+    none_of: list[str] = Field(default=[], max_length=100)
+    website_any_of: list[str] = Field(default=[], max_length=100)
+    instagram_any_of: list[str] = Field(default=[], max_length=100)
+    require_all: bool = False
+    min_followers: int | None = Field(default=None, ge=0)
+    max_followers: int | None = Field(default=None, ge=0)
+    search_terms: list[str] = Field(default=[], max_length=50)
+    requires_website: bool = False
+    min_reviews: int | None = Field(default=None, ge=0)
+    places: list[str] = Field(default=[], max_length=100)
+
+
 class Icp(ApiModel):
-    """A Lead Intel ICP (read-only) with this service's outreach profile for it, if one exists."""
+    """A Lead Intel ICP, every field as Lead Intel stores it (read-only), plus this workspace's outreach
+    profile for it if one exists."""
 
     id: UUID
     name: str
     industry: str
     priority: int
     enabled: bool
+    # Which text the rule reads; empty means all of it.
+    sources: list[str]
+    any_of: list[str]
+    none_of: list[str]
+    website_any_of: list[str]
+    instagram_any_of: list[str]
+    require_all: bool
+    min_followers: int | None
+    max_followers: int | None
+    # What Lead Intel searches Google Maps with.
     search_terms: list[str]
+    requires_website: bool
+    min_reviews: int | None
     places: list[str]
     company_count: int
     created_at: datetime
@@ -209,6 +250,8 @@ class WorkspaceOut(ApiModel):
 class StakeholderOut(ApiModel):
     id: UUID
     company_id: UUID | None = Field(validation_alias="lead_intel_business_id")
+    icp_id: UUID | None = Field(validation_alias="lead_intel_icp_id")
+    organization_name: str | None
     source: str
     first_name: str
     # Masked ("Hu***n") until the person is revealed.
@@ -244,6 +287,30 @@ class CompanySearchResult(ApiModel):
 class StakeholderSearchResult(ApiModel):
     results: list[CompanySearchResult]
     # Set when Apollo refused (bad key, plan, rate limit); the rest weren't searched.
+    error: str | None = None
+
+
+class IcpSearchIn(ApiModel):
+    """Search Apollo for people who fit a Lead Intel ICP, anywhere, not just at companies already imported."""
+
+    icp_id: UUID
+    titles: list[str] = Field(default=[], max_length=30)
+    seniorities: list[str] = Field(default=[], max_length=11)
+    # Company headquarters: cities, states, countries or postcodes.
+    locations: list[str] = Field(default=[], max_length=30)
+    keywords: str = Field(default="", max_length=200)
+    # "min,max" employee counts, e.g. "1,10".
+    employee_ranges: list[str] = Field(default=[], max_length=10)
+    verified_email_only: bool = True
+    per_page: int = Field(default=25, ge=1, le=100)
+    page: int = Field(default=1, ge=1, le=500)
+
+
+class IcpSearchResult(ApiModel):
+    found: int
+    new: int
+    total_at_apollo: int | None
+    page: int
     error: str | None = None
 
 

@@ -9,7 +9,7 @@ from database import get_session
 from dependencies import get_apollo, get_provider_call_repo, get_stakeholder_repo
 from main import app
 from services.apollo import ApolloError, FoundPerson, RevealedPerson
-from tests.conftest import COMPANY_ID, WORKSPACE_ID
+from tests.conftest import COMPANY_ID, ICP_ID, WORKSPACE_ID
 
 WS = {"X-Workspace-Id": str(WORKSPACE_ID)}
 FREE_PLAN = "The api/v1/mixed_people/api_search API is not included in your Free plan."
@@ -21,10 +21,11 @@ class FakeApollo:
         self.reveals = 0
         self.searched: list[tuple] = []
 
-    async def search_people(self, domain, titles, seniorities, per_page=25):
+    async def search_people(self, domain, titles, seniorities, per_page=25, **filters):
         if self.search_error:
             raise self.search_error
         self.searched.append((domain, titles, seniorities))
+        self.filters = filters
         return [FoundPerson("ap1", "Ava", "Mo***n", "Owner", True, "Glow", {}),
                 FoundPerson("ap2", "Liam", "Ca***r", "Founder", False, "Glow", {})], 12  # fmt: skip
 
@@ -40,25 +41,29 @@ class FakeStakeholders:
     def __init__(self) -> None:
         self.rows: dict = {}
 
-    def _row(self, ws, company_id, p):
+    def _row(self, ws, company_id, p, icp_id=None):
         return SimpleNamespace(
-            id=uuid4(), workspace_id=ws, lead_intel_business_id=company_id, source="apollo", external_id=p.apollo_id,
+            id=uuid4(), workspace_id=ws, lead_intel_business_id=company_id, lead_intel_icp_id=icp_id,
+            organization_name=p.organization_name, source="apollo", external_id=p.apollo_id,
             first_name=p.first_name, last_name=p.last_name_masked, title=p.title, seniority=None, linkedin_url=None,
             has_email=p.has_email, email=None, email_status=None, revealed_at=None, lead_id=None,
             found_at=datetime.now(UTC),
         )  # fmt: skip
 
-    async def list(self, ws, company_id=None):
-        return [r for r in self.rows.values() if company_id in (None, r.lead_intel_business_id)]
+    async def list(self, ws, company_id=None, icp_id=None):
+        return [
+            r for r in self.rows.values()
+            if company_id in (None, r.lead_intel_business_id) and icp_id in (None, r.lead_intel_icp_id)
+        ]  # fmt: skip
 
     async def get_many(self, ws, ids):
         return [r for r in self.rows.values() if r.id in ids]
 
-    async def save_found(self, ws, company_id, people):
+    async def save_found(self, ws, company_id, people, icp_id=None):
         new = 0
         for p in people:
             if not any(r.external_id == p.apollo_id for r in self.rows.values()):
-                row = self._row(ws, company_id, p)
+                row = self._row(ws, company_id, p, icp_id)
                 self.rows[row.id] = row
                 new += 1
         return new
@@ -164,3 +169,51 @@ def test_missing_key_is_503(client, workspace_companies, monkeypatch) -> None:
     monkeypatch.setattr(get_settings(), "apollo_api_key", None)
     app.dependency_overrides.pop(get_apollo, None)
     assert search(client).status_code == 503
+
+
+def icp_search(client, **body):
+    return client.post("/api/v1/stakeholders/search-icp", json={"icpId": str(ICP_ID), **body}, headers=WS)
+
+
+def test_icp_search_sends_filters_and_saves_people_without_a_company(client, apollo_env) -> None:
+    result = icp_search(
+        client, titles=["Owner"], seniorities=["owner"], locations=["Chicago", " "], keywords=" screen printing ",
+        employeeRanges=["1,10", "11,50"], perPage=50, page=2,
+    ).json()  # fmt: skip
+    assert result == {"found": 2, "new": 2, "totalAtApollo": 12, "page": 2, "error": None}
+    assert apollo_env.apollo.searched == [(None, ["Owner"], ["owner"])]
+    assert apollo_env.apollo.filters == {
+        "page": 2, "organization_locations": ["Chicago"], "keywords": "screen printing",
+        "employee_ranges": ["1,10", "11,50"], "email_statuses": ["verified"],
+    }  # fmt: skip
+    listed = client.get(f"/api/v1/stakeholders?icpId={ICP_ID}", headers=WS).json()
+    assert len(listed) == 2
+    assert all(s["companyId"] is None and s["icpId"] == str(ICP_ID) and s["organizationName"] == "Glow" for s in listed)
+
+
+def test_icp_search_can_include_unverified_emails(client, apollo_env) -> None:
+    icp_search(client, titles=["Owner"], verifiedEmailOnly=False)
+    assert apollo_env.apollo.filters["email_statuses"] is None
+
+
+def test_icp_search_validation(client, apollo_env) -> None:
+    assert icp_search(client).status_code == 422  # no filters would match everyone
+    assert icp_search(client, titles=["Owner"], employeeRanges=["ten"]).status_code == 422
+    assert icp_search(client, titles=["Owner"], perPage=101).status_code == 422
+    assert client.post("/api/v1/stakeholders/search-icp", json={"icpId": str(uuid4()), "titles": ["x"]}, headers=WS).status_code == 404
+
+
+def test_icp_search_reports_apollo_refusal(client, apollo_env) -> None:
+    apollo_env.apollo.search_error = ApolloError(FREE_PLAN, 403)
+    result = icp_search(client, titles=["Owner"]).json()
+    assert result["error"] == FREE_PLAN and result["found"] == 0
+    assert apollo_env.rows.rows == {}
+
+
+def test_reveal_of_icp_found_person_uses_the_icp_and_apollos_company(client, apollo_env) -> None:
+    icp_search(client, titles=["Owner"])
+    ava = next(r for r in apollo_env.rows.rows.values() if r.external_id == "ap1")
+    result = client.post("/api/v1/stakeholders/reveal", json={"stakeholderIds": [str(ava.id)]}, headers=WS).json()
+    assert result["revealed"] == 1
+    [lead] = apollo_env.leads
+    assert (lead.company, lead.domain) == ("Glow", "glowmedspa.com")

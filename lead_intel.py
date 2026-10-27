@@ -24,6 +24,7 @@ from sqlalchemy import (
     cast,
     func,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -34,12 +35,26 @@ lead_intel_metadata = MetaData(schema="public")
 icps = Table(
     "icps",
     lead_intel_metadata,
-    Column("id", PG_UUID(as_uuid=True), primary_key=True),
+    # Lead Intel generates ids itself (gen_random_uuid()); described here, not set by us.
+    Column("id", PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+    # Lead Intel user who created it. Only written when this service adds an ICP (lead_intel_writes.py).
+    Column("created_by", PG_UUID(as_uuid=True)),
     Column("name", Text),
     Column("industry", Text),
     Column("priority", Integer),
     Column("enabled", Boolean),
+    # The matching rule, exactly as Lead Intel stores it.
+    Column("sources", ARRAY(Text)),
+    Column("any_of", ARRAY(Text)),
+    Column("none_of", ARRAY(Text)),
+    Column("website_any_of", ARRAY(Text)),
+    Column("instagram_any_of", ARRAY(Text)),
+    Column("require_all", Boolean),
+    Column("min_followers", Integer),
+    Column("max_followers", Integer),
     Column("search_terms", ARRAY(Text)),
+    Column("requires_website", Boolean),
+    Column("min_reviews", Integer),
     Column("places", ARRAY(Text)),
     Column("created_at", DateTime(timezone=True)),
     Column("updated_at", DateTime(timezone=True)),

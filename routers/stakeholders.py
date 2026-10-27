@@ -22,6 +22,8 @@ from dependencies import (
 from lead_intel import LeadIntelRepo
 from schemas import (
     CompanySearchResult,
+    IcpSearchIn,
+    IcpSearchResult,
     RevealOutcome,
     StakeholderOut,
     StakeholderRevealIn,
@@ -41,10 +43,64 @@ STOP_STATUSES = {401, 403, 429}
 @router.get("", response_model=list[StakeholderOut])
 async def list_stakeholders(
     company_id: UUID | None = Query(default=None, alias="companyId"),
+    icp_id: UUID | None = Query(default=None, alias="icpId"),
     workspace_id: UUID = Depends(require_workspace_id),
     stakeholders: StakeholderRepo = Depends(get_stakeholder_repo),
 ) -> list[StakeholderOut]:
-    return [StakeholderOut.model_validate(s) for s in await stakeholders.list(workspace_id, company_id)]
+    return [StakeholderOut.model_validate(s) for s in await stakeholders.list(workspace_id, company_id, icp_id)]
+
+
+@router.post("/search-icp", response_model=IcpSearchResult)
+async def search_by_icp(
+    body: IcpSearchIn,
+    workspace_id: UUID = Depends(require_workspace_id),
+    lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    workspace_companies: WorkspaceCompanyRepo = Depends(get_workspace_company_repo),
+    stakeholders: StakeholderRepo = Depends(get_stakeholder_repo),
+    calls: ProviderCallRepo = Depends(get_provider_call_repo),
+    apollo: ApolloClient = Depends(get_apollo),
+) -> IcpSearchResult:
+    """Search Apollo for people who fit an ICP: its titles, places, size and keywords. Uses no credits.
+
+    One page of results per call; ask for the next page to see more. Lead Intel is only read, to
+    check the ICP exists.
+    """
+    if bad := [s for s in body.seniorities if s not in SENIORITIES]:
+        raise HTTPException(status_code=422, detail=f"Unknown seniorities: {', '.join(bad)}")
+    if bad := [r for r in body.employee_ranges if not _is_range(r)]:
+        raise HTTPException(status_code=422, detail=f"Employee ranges must look like 1,10: {', '.join(bad)}")
+    if not await workspace_companies.workspace_exists(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if not await lead_intel.get_icp(body.icp_id):
+        raise HTTPException(status_code=404, detail="ICP not found")
+    titles = [t.strip() for t in body.titles if t.strip()]
+    locations = [loc.strip() for loc in body.locations if loc.strip()]
+    if not (titles or body.seniorities or locations or body.keywords.strip() or body.employee_ranges):
+        raise HTTPException(status_code=422, detail="Add at least one filter, or the search would match everyone")
+
+    try:
+        people, total = await apollo.search_people(
+            None,
+            titles,
+            body.seniorities,
+            body.per_page,
+            page=body.page,
+            organization_locations=locations,
+            keywords=body.keywords.strip() or None,
+            employee_ranges=body.employee_ranges,
+            email_statuses=["verified"] if body.verified_email_only else None,
+        )
+    except ApolloError as exc:
+        await calls.record(workspace_id, "apollo", "mixed_people/api_search", "failed")
+        return IcpSearchResult(found=0, new=0, total_at_apollo=None, page=body.page, error=exc.message)
+    await calls.record(workspace_id, "apollo", "mixed_people/api_search", "succeeded", credits=0)
+    new = await stakeholders.save_found(workspace_id, None, people, icp_id=body.icp_id)
+    return IcpSearchResult(found=len(people), new=new, total_at_apollo=total, page=body.page)
+
+
+def _is_range(value: str) -> bool:
+    parts = value.split(",")
+    return len(parts) == 2 and all(p.strip().isdigit() for p in parts) and int(parts[0]) <= int(parts[1])
 
 
 @router.post("/search", response_model=StakeholderSearchResult)
@@ -156,6 +212,7 @@ async def reveal(
             outcomes.append(RevealOutcome(stakeholder_id=sid, status="no_match", reason="Apollo had no match"))
             continue
 
+        # People found by ICP have no Lead Intel company; Apollo's own company data stands in.
         company = by_company.get(s.lead_intel_business_id) or {}
         lead = clean_lead(
             {
@@ -171,7 +228,8 @@ async def reveal(
         lead_id, created = (None, False)
         if lead.email or lead.linkedin_url:
             lead_id, created = await lead_from_stakeholder(
-                session, workspace_id, company.get("icp_id"), s.lead_intel_business_id, lead, s.external_id,
+                session, workspace_id, company.get("icp_id") or s.lead_intel_icp_id, s.lead_intel_business_id, lead,
+                s.external_id,
                 person.email_status,
             )  # fmt: skip
         await calls.record(

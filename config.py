@@ -1,4 +1,5 @@
 from functools import lru_cache
+from uuid import UUID
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +24,10 @@ class Settings(BaseSettings):
     database_url: str | None = None
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
+
+    # Lead Intel user that new ICPs are recorded as created by (Lead Intel requires one). Until this
+    # app has sign-in, every ICP added here is attributed to this account.
+    lead_intel_icp_created_by: UUID | None = None
 
     # Providers.
     apollo_api_key: str | None = None

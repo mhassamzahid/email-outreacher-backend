@@ -77,3 +77,28 @@ def test_supabase_url_is_converted_for_asyncpg() -> None:
     url, args = to_async_url("postgres://u:p@db.example.supabase.co:5432/postgres?sslmode=require")
     assert url == "postgresql+asyncpg://u:p@db.example.supabase.co:5432/postgres"
     assert args == {"ssl": "require"}
+
+
+# ---- The one agreed write: adding ICPs to Lead Intel (insert-only, icps table only) ----
+
+APP_FILES = [p for p in ROOT.glob("**/*.py") if not {".venv", "tests", "migrations"} & set(p.parts)]
+
+
+def test_the_only_lead_intel_write_is_inserting_icps() -> None:
+    source = (ROOT / "lead_intel_writes.py").read_text(encoding="utf-8")
+    assert source.count("insert(") == 1 and "insert(icps)" in source
+    for word in ("update(", "delete(", "UPDATE ", "DELETE ", "ALTER ", "DROP ", "TRUNCATE"):
+        assert word not in source, f"lead_intel_writes.py must never {word.strip('( ')}"
+    assert "from lead_intel import icps\n" in source, "it may only touch the icps table"
+
+
+def test_nothing_else_writes_lead_intel_tables() -> None:
+    names = "|".join(t.name for t in lead_intel_metadata.sorted_tables)
+    write = re.compile(rf"\b(insert|update|delete)\(\s*({names})\b")
+    offenders = [
+        f"{p.relative_to(ROOT)}: {m.group(0)}"
+        for p in APP_FILES
+        for m in write.finditer(p.read_text(encoding="utf-8"))
+        if not (p.name == "lead_intel_writes.py" and m.group(0).replace(" ", "") == "insert(icps")
+    ]
+    assert not offenders, offenders

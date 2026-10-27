@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from config import get_settings
 from crud import IcpProfileRepo, LeadRepo, ProviderCallRepo, StakeholderRepo, WorkspaceCompanyRepo, WorkspaceRepo
-from database import get_readonly_conn, get_session
+from database import get_lead_intel_icp_conn, get_readonly_conn, get_session
 from lead_intel import LeadIntelRepo
+from lead_intel_writes import LeadIntelIcpWriter
 from services.apollo import ApolloClient
 
 
@@ -59,3 +60,7 @@ async def get_apollo() -> AsyncIterator[ApolloClient]:
         yield client
     finally:
         await client.aclose()
+
+
+def get_lead_intel_icp_writer(conn: AsyncConnection = Depends(get_lead_intel_icp_conn)) -> LeadIntelIcpWriter:
+    return LeadIntelIcpWriter(conn)

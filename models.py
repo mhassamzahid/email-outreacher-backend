@@ -306,11 +306,16 @@ class Stakeholder(Base):
         CheckConstraint(_in("source", ("apollo", "apify_linkedin")), name="source"),
         UniqueConstraint("workspace_id", "source", "external_id"),
         Index("eo_stakeholders_business_idx", "workspace_id", "lead_intel_business_id"),
+        Index("eo_stakeholders_icp_idx", "workspace_id", "lead_intel_icp_id"),
     )
 
     id: Mapped[UUID] = _uuid_pk()
     workspace_id: Mapped[UUID] = _workspace()
     lead_intel_business_id: Mapped[UUID | None] = mapped_column(default=None)
+    # The Lead Intel ICP whose search found them, when found by ICP rather than by company.
+    lead_intel_icp_id: Mapped[UUID | None] = mapped_column(default=None)
+    # Their employer as Apollo names it; the only company we know for people found by ICP.
+    organization_name: Mapped[str | None] = mapped_column(Text, default=None)
     source: Mapped[str] = mapped_column(Text)
     external_id: Mapped[str] = mapped_column(Text)
     first_name: Mapped[str] = mapped_column(Text, server_default="")

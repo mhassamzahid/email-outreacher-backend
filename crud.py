@@ -231,17 +231,23 @@ class StakeholderRepo:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list(self, workspace_id: UUID, company_id: UUID | None = None) -> list[Stakeholder]:
+    async def list(
+        self, workspace_id: UUID, company_id: UUID | None = None, icp_id: UUID | None = None
+    ) -> list[Stakeholder]:
         query = select(Stakeholder).where(Stakeholder.workspace_id == workspace_id)
         if company_id:
             query = query.where(Stakeholder.lead_intel_business_id == company_id)
+        if icp_id:
+            query = query.where(Stakeholder.lead_intel_icp_id == icp_id)
         return list(await self.session.scalars(query.order_by(Stakeholder.found_at.desc(), Stakeholder.id)))
 
     async def get_many(self, workspace_id: UUID, ids: list[UUID]) -> list[Stakeholder]:
         query = select(Stakeholder).where(Stakeholder.workspace_id == workspace_id, Stakeholder.id.in_(ids))
         return list(await self.session.scalars(query))
 
-    async def save_found(self, workspace_id: UUID, company_id: UUID, people: list[FoundPerson]) -> int:
+    async def save_found(
+        self, workspace_id: UUID, company_id: UUID | None, people: list[FoundPerson], icp_id: UUID | None = None
+    ) -> int:
         """Add new search hits and refresh known ones; returns how many were new.
 
         A person who was already revealed keeps their full name and email: search results only
@@ -262,6 +268,8 @@ class StakeholderRepo:
             statement = insert(Stakeholder).values(
                 workspace_id=workspace_id,
                 lead_intel_business_id=company_id,
+                lead_intel_icp_id=icp_id,
+                organization_name=p.organization_name,
                 source="apollo",
                 external_id=p.apollo_id,
                 first_name=p.first_name,
@@ -275,7 +283,12 @@ class StakeholderRepo:
                 set_={
                     "title": statement.excluded.title,
                     "has_email": statement.excluded.has_email,
-                    "lead_intel_business_id": statement.excluded.lead_intel_business_id,
+                    # A search by ICP knows no Lead Intel company; it must not wipe one a company search set.
+                    "lead_intel_business_id": func.coalesce(
+                        statement.excluded.lead_intel_business_id, Stakeholder.lead_intel_business_id
+                    ),
+                    "lead_intel_icp_id": func.coalesce(Stakeholder.lead_intel_icp_id, statement.excluded.lead_intel_icp_id),
+                    "organization_name": func.coalesce(statement.excluded.organization_name, Stakeholder.organization_name),
                     "raw": case((Stakeholder.revealed_at.is_(None), statement.excluded.raw), else_=Stakeholder.raw),
                     "last_name": case(
                         (Stakeholder.revealed_at.is_(None), statement.excluded.last_name), else_=Stakeholder.last_name
@@ -339,7 +352,7 @@ class ProviderCallRepo:
 
 
 async def lead_from_stakeholder(
-    session: AsyncSession, workspace_id: UUID, icp_id: UUID | None, company_id: UUID, lead: LeadInput, apollo_id: str,
+    session: AsyncSession, workspace_id: UUID, icp_id: UUID | None, company_id: UUID | None, lead: LeadInput, apollo_id: str,
     email_status: str | None,
 ) -> tuple[UUID | None, bool]:  # fmt: skip
     """The lead for a revealed person: created, or the existing one with the same email or LinkedIn.

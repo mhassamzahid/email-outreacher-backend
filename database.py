@@ -75,6 +75,19 @@ async def get_readonly_conn() -> AsyncIterator[AsyncConnection]:
             await conn.rollback()
 
 
+async def get_lead_intel_icp_conn() -> AsyncIterator[AsyncConnection]:
+    """A read-write connection for the single agreed Lead Intel write: adding an ICP.
+
+    The writer commits its own insert; anything uncommitted is rolled back when the connection closes.
+    """
+    try:
+        engine = get_engine()
+    except DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    async with engine.connect() as conn:
+        yield conn
+
+
 async def get_session() -> AsyncIterator[AsyncSession]:
     """A read-write session, for this service's own tables in the `outreach` schema."""
     try:

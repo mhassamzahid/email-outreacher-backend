@@ -17,7 +17,7 @@ uvicorn main:app --reload
 
 ## Database
 
-This service shares Lead Intel's Supabase database. **Lead Intel's tables are read-only here.**
+This service shares Lead Intel's Supabase database. **Lead Intel's tables are read-only here, with one agreed exception:** adding a new ICP inserts a row into `public.icps` (`lead_intel_writes.py`). Nothing in Lead Intel is ever updated or deleted, and no other Lead Intel table is written; `tests/test_lead_intel_safety.py` enforces this.
 
 - Lead Intel tables (`public.icps`, `businesses`, `field_metadata`, `identity_keys`) are read
   through `lead_intel.py`, inside `SET TRANSACTION READ ONLY`, so Postgres rejects
@@ -45,6 +45,7 @@ Check the connection and that Lead Intel still has every column we read:
 | PATCH | `/api/v1/workspaces/{id}` | Rename or change the description |
 | DELETE | `/api/v1/workspaces/{id}` | Delete it and everything it owns in our `eo_` tables; refuses the last one |
 | GET | `/api/v1/icps` | Lead Intel ICPs with company counts and the outreach profile |
+| POST | `/api/v1/icps` | Add an ICP to Lead Intel's `icps` table (Lead Intel's fields; insert-only, recorded as `LEAD_INTEL_ICP_CREATED_BY`) |
 | GET | `/api/v1/icps/{id}` | One ICP |
 | PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP (writes `outreach.eo_icp_profiles` only) |
 | GET | `/api/v1/icps/{id}/companies` | Contactable companies for an ICP (`q`, `limit`, `offset`) |
@@ -54,6 +55,7 @@ Check the connection and that Lead Intel still has every column we read:
 | GET | `/api/v1/companies/{id}` | One company with every stored field (website text, Instagram profile…) |
 | GET | `/api/v1/stakeholders` | People found at the workspace's companies (`companyId`) |
 | POST | `/api/v1/stakeholders/search` | Apollo People Search by company domain, `{companyIds, titles, seniorities}`; 0 credits |
+| POST | `/api/v1/stakeholders/search-icp` | Apollo People Search for a Lead Intel ICP, anywhere: titles, seniorities, company locations, keywords, size, verified-email only, `page`/`perPage` (max 100); 0 credits |
 | POST | `/api/v1/stakeholders/reveal` | Apollo enrichment for `{stakeholderIds}` (max 25): email + LinkedIn, adds them as leads; ~1 credit each, never twice |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |
