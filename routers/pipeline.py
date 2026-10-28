@@ -15,7 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import get_settings
-from crud import CompanyRepo, IcpProfileRepo, PostRepo, PromptRepo, ProviderCallRepo, StakeholderRepo
+from crud import CompanyRepo, IcpProfileRepo, PostRepo, PromptRepo, ProviderCallRepo, SettingsRepo, StakeholderRepo
 from dependencies import (
     get_company_repo,
     get_icp_profile_repo,
@@ -26,6 +26,7 @@ from dependencies import (
     get_post_repo,
     get_prompt_repo,
     get_provider_call_repo,
+    get_settings_repo,
     get_stakeholder_repo,
     get_website_reader,
     require_workspace_id,
@@ -151,6 +152,7 @@ async def research(
     prompts: PromptRepo = Depends(get_prompt_repo),
     posts: PostRepo = Depends(get_post_repo),
     calls: ProviderCallRepo = Depends(get_provider_call_repo),
+    workspace_settings: SettingsRepo = Depends(get_settings_repo),
     reader: WebsiteReader = Depends(get_website_reader),
     apify: ApifyClient | None = Depends(get_optional_apify),
     scorer: CompanyScorer | None = Depends(get_optional_scorer),
@@ -167,6 +169,7 @@ async def research(
         return ResearchResult(researched=0, skipped=skipped, qualified=0, not_fit=0, errors=0, cost_usd=0, notes=[])
 
     settings = get_settings()
+    limits = await workspace_settings.research(workspace_id)
     summary_total = ResearchResult(researched=0, skipped=skipped, qualified=0, not_fit=0, errors=0, cost_usd=0, notes=[])
     by_icp: dict[UUID | None, list] = {}
     for c in todo:
@@ -183,8 +186,9 @@ async def research(
             version.system_prompt, version.user_prompt, version.model, version.max_tokens, str(version.id)
         )
         summary = await research_companies(
-            group, icp, profile_dict, reader, apify, scorer, settings.company_score_threshold, spec
-        )
+            group, icp, profile_dict, reader, apify, scorer, settings.company_score_threshold, spec,
+            max_pages=limits["research_max_pages"], max_seconds=limits["research_max_seconds"],
+        )  # fmt: skip
         for company in group:
             await companies.save(company)
         # Everything read is kept: each page's full text, and the company's own Instagram posts.

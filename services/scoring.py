@@ -27,6 +27,33 @@ class CompanyScore(BaseModel):
     concerns: list[str]
 
 
+class CompanyScoreOrRead(CompanyScore):
+    """The score so far, and the one page to read next if the evidence isn't enough yet."""
+
+    next_page: str | None
+    next_reason: str
+
+
+@dataclass(frozen=True)
+class MoreReading:
+    """Pages of the site Claude may ask to read next, and how many it has read of how many allowed."""
+
+    candidates: list[dict]  # [{url, text}]
+    read: int
+    limit: int
+
+
+def more_reading_note(more: MoreReading) -> str:
+    links = "\n".join(f'{i}. {c["url"]}' + (f' ("{c["text"]}")' if c.get("text") else "") for i, c in enumerate(more.candidates, 1))
+    return (
+        f"<more_pages>\nYou have read {more.read} of at most {more.limit} pages of this company's website. "
+        f"Pages of the site you haven't read:\n{links}\n\n"
+        "If what you've read isn't enough to judge this company confidently, set next_page to the one URL above "
+        "most likely to settle it, and next_reason to what you expect to learn there. If you can judge it now, "
+        "set next_page to null. Don't read more just to be thorough.\n</more_pages>"
+    )
+
+
 @dataclass
 class ScoreResult:
     score: int | None
@@ -37,6 +64,9 @@ class ScoreResult:
     error: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    # Set when Claude wants one more page read before it decides.
+    next_page: str | None = None
+    next_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -65,11 +95,19 @@ class CompanyScorer:
         await self._client.close()
 
     async def score(
-        self, icp: dict[str, Any], profile: dict[str, Any] | None, evidence: dict[str, Any], prompt: PromptSpec | None = None
+        self,
+        icp: dict[str, Any],
+        profile: dict[str, Any] | None,
+        evidence: dict[str, Any],
+        prompt: PromptSpec | None = None,
+        more: MoreReading | None = None,
     ) -> ScoreResult:
+        """Score the company. With `more`, Claude may instead ask for one more page (next_page)."""
         spec = prompt or default_spec(self._model)
         model = spec.model
         user = render(spec.user, verify_variables(icp, profile, evidence))
+        if more is not None:
+            user += "\n\n" + more_reading_note(more)
         async with self._gate:
             try:
                 response = await self._client.messages.parse(
@@ -77,7 +115,7 @@ class CompanyScorer:
                     max_tokens=spec.max_tokens,
                     system=spec.system,
                     output_config={"effort": "low"},
-                    output_format=CompanyScore,
+                    output_format=CompanyScore if more is None else CompanyScoreOrRead,
                     messages=[{"role": "user", "content": user}],
                 )
             except anthropic.APIError as exc:
@@ -96,4 +134,6 @@ class CompanyScorer:
             concerns=[c.strip() for c in parsed.concerns if c.strip()][:6],
             model=model,
             **tokens,
+            next_page=(getattr(parsed, "next_page", None) or "").strip() or None,
+            next_reason=(getattr(parsed, "next_reason", "") or "").strip(),
         )

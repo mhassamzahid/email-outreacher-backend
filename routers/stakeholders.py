@@ -1,19 +1,24 @@
 """Find the people at a workspace's companies (Apollo search, free) and reveal the ones worth emailing
 (Apollo enrichment, paid). Revealing a person turns them into a lead.
 
+People can also be added by hand or from a CSV in Apollo's export format (template.csv). Anyone with
+an email or a LinkedIn URL becomes a lead straight away; each is linked to the pipeline company with
+the same domain (or the same name).
+
 Lead Intel is only read here: for each company's name, domain and ICP.
 """
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from crud import ProviderCallRepo, StakeholderRepo, WorkspaceCompanyRepo, lead_from_stakeholder
+from crud import CompanyRepo, ProviderCallRepo, StakeholderRepo, WorkspaceCompanyRepo, lead_from_stakeholder
 from database import get_session
 from dependencies import (
     get_apify,
     get_apollo,
+    get_company_repo,
     get_lead_intel_repo,
     get_provider_call_repo,
     get_stakeholder_repo,
@@ -26,6 +31,10 @@ from schemas import (
     AddAsLeadsResult,
     CompanySearchResult,
     LinkedInSearchIn,
+    PeopleImportResult,
+    PeopleRowError,
+    PersonAdded,
+    PersonIn,
     IcpSearchIn,
     IcpSearchResult,
     RevealOutcome,
@@ -37,12 +46,136 @@ from schemas import (
 )
 from services.apify import EMPLOYEES_ACTOR, ApifyClient, ApifyError
 from services.apollo import SENIORITIES, ApolloClient, ApolloError
-from services.leads import clean_lead
+from services.leads import CsvError, clean_lead
+from services.people_csv import (
+    PersonRow,
+    clean_person,
+    company_domain,
+    parse_people_csv,
+    template_csv,
+)
 
 router = APIRouter(prefix="/stakeholders", tags=["stakeholders"])
 
 # Refusals that will repeat for every other company too, so there's no point carrying on.
 STOP_STATUSES = {401, 403, 429}
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+# What a lead made from a person records as its origin.
+LEAD_ORIGIN = {"apollo": "apollo", "apify_linkedin": "apify", "manual": "manual"}
+
+
+@router.get("/template.csv", response_class=Response)
+def people_template() -> Response:
+    """The people CSV template: the columns of Apollo's people export that we use, with one example."""
+    return Response(
+        content=template_csv(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="people-template.csv"'},
+    )
+
+
+async def _check_icp(lead_intel: LeadIntelRepo, icp_id: UUID | None) -> None:
+    if icp_id and not await lead_intel.get_icp(icp_id):
+        raise HTTPException(status_code=404, detail="ICP not found")
+
+
+async def _add(
+    session: AsyncSession, stakeholders: StakeholderRepo, workspace_id: UUID, icp_id: UUID | None, person: PersonRow,
+    company, origin: str,
+):  # fmt: skip
+    """Save one person; with an email or LinkedIn URL, make them a lead too. Returns (row, new, lead created)."""
+    row, new = await stakeholders.save_person(workspace_id, icp_id, person, company, origin)
+    await stakeholders.commit()
+    lead_created = False
+    if not row.lead_id and (person.email or person.linkedin_url):
+        lead = clean_lead({
+            "first_name": person.first_name, "last_name": person.last_name, "email": person.email,
+            "title": person.title, "company": row.organization_name or person.company,
+            "website": person.website or (company.website_url if company else "") or "", "linkedin_url": person.linkedin_url,
+        })  # fmt: skip
+        lead_id, lead_created = await lead_from_stakeholder(
+            session, workspace_id, row.lead_intel_icp_id, row.lead_intel_business_id, lead, row.external_id,
+            row.email_status, origin=origin,
+        )  # fmt: skip
+        if lead_id:
+            await stakeholders.link_lead(row, lead_id)
+    return row, new, lead_created
+
+
+@router.post("", response_model=PersonAdded, status_code=201)
+async def add_person(
+    body: PersonIn,
+    workspace_id: UUID = Depends(require_workspace_id),
+    lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    stakeholders: StakeholderRepo = Depends(get_stakeholder_repo),
+    companies: CompanyRepo = Depends(get_company_repo),
+    session: AsyncSession = Depends(get_session),
+) -> PersonAdded:
+    """Add one person by hand. Adding someone already here updates them instead."""
+    if not await companies.workspace_exists(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    await _check_icp(lead_intel, body.icp_id)
+    person, problem = clean_person(body.model_dump(exclude={"icp_id"}))
+    if person is None:
+        raise HTTPException(status_code=422, detail=problem)
+    find = await companies.matcher(workspace_id)
+    company = find(company_domain(person), person.company)
+    row, new, lead_created = await _add(session, stakeholders, workspace_id, body.icp_id, person, company, "manual")
+    return PersonAdded(
+        person=StakeholderOut.model_validate(row), new=new, lead_created=lead_created, company_name=company.name if company else None
+    )
+
+
+@router.post("/import", response_model=PeopleImportResult)
+async def import_people(
+    request: Request,
+    workspace_id: UUID = Depends(require_workspace_id),
+    icp_id: UUID | None = Query(default=None, alias="icpId"),
+    dry_run: bool = Query(default=False, alias="dryRun"),
+    lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    stakeholders: StakeholderRepo = Depends(get_stakeholder_repo),
+    companies: CompanyRepo = Depends(get_company_repo),
+    session: AsyncSession = Depends(get_session),
+) -> PeopleImportResult:
+    """Import people from a CSV sent as the body (Content-Type: text/csv), in Apollo's export format.
+
+    With dryRun=true nothing is saved: the result previews what would happen. People already here
+    (same Apollo id, LinkedIn URL or email) are updated, not added twice.
+    """
+    if not await companies.workspace_exists(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    await _check_icp(lead_intel, icp_id)
+    data = await request.body()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="The file is over 5 MB. Split it and import the parts.")
+    try:
+        parsed = parse_people_csv(data.decode("utf-8-sig", errors="replace"))
+    except CsvError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    find = await companies.matcher(workspace_id)
+    added = updated = leads_created = linked = 0
+    for _, person in parsed.people:
+        company = find(company_domain(person), person.company)
+        linked += company is not None
+        if dry_run:
+            continue
+        _, new, lead_created = await _add(session, stakeholders, workspace_id, icp_id, person, company, "csv")
+        added += new
+        updated += not new
+        leads_created += lead_created
+    return PeopleImportResult(
+        dry_run=dry_run,
+        total_rows=len(parsed.people) + len(parsed.errors) + parsed.duplicates,
+        valid=len(parsed.people),
+        added=added,
+        updated=updated,
+        leads_created=leads_created,
+        linked_to_companies=linked,
+        duplicates_in_file=parsed.duplicates,
+        errors=[PeopleRowError(row=r, reason=reason) for r, reason in parsed.errors[:200]],
+        columns=parsed.columns,
+    )
 
 
 @router.get("", response_model=list[StakeholderOut])
@@ -146,7 +279,7 @@ async def add_as_leads(
         )
         lead_id, created = await lead_from_stakeholder(
             session, workspace_id, company.get("icp_id") or s.lead_intel_icp_id, s.lead_intel_business_id, lead,
-            s.external_id, s.email_status, origin="apify" if s.source == "apify_linkedin" else "apollo",
+            s.external_id, s.email_status, origin=LEAD_ORIGIN.get(s.source, "apollo"),
         )  # fmt: skip
         if lead_id is None:
             skipped += 1
@@ -307,7 +440,8 @@ async def reveal(
             continue
         try:
             # People found on LinkedIn have no Apollo id; Apollo matches them by LinkedIn URL.
-            if s.source == "apify_linkedin":
+            # Only Apollo people have an Apollo id; the rest are looked up by their LinkedIn URL.
+            if s.source != "apollo":
                 person = await apollo.reveal(linkedin_url=s.linkedin_url) if s.linkedin_url else None
             else:
                 person = await apollo.reveal(s.external_id)
@@ -341,7 +475,7 @@ async def reveal(
         if lead.email or lead.linkedin_url:
             lead_id, created = await lead_from_stakeholder(
                 session, workspace_id, company.get("icp_id") or s.lead_intel_icp_id, s.lead_intel_business_id, lead,
-                s.external_id, person.email_status, origin="apify" if s.source == "apify_linkedin" else "apollo",
+                s.external_id, person.email_status, origin=LEAD_ORIGIN.get(s.source, "apollo"),
             )  # fmt: skip
         await calls.record(
             workspace_id,

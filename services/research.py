@@ -20,8 +20,8 @@ from uuid import UUID
 from models import Company
 from services.apify import ApifyClient, ApifyError, FetchedPost, InstagramProfile, instagram_handle
 from services.icp_rules import Evidence, check
-from services.scoring import CompanyScorer, PromptSpec
-from services.website import SiteRead, WebsiteReader, normalize_domain
+from services.scoring import CompanyScorer, MoreReading, PromptSpec
+from services.website import AI_BUDGET_SECONDS, AI_MAX_PAGES, SiteRead, WebsiteReader, normalize_domain
 
 READ_CONCURRENCY = 3  # sites read at once; each site is still read one page at a time
 
@@ -67,6 +67,7 @@ def _evidence(company: Company, site: SiteRead | None, ig: InstagramProfile | No
 def _score_evidence(company: Company, site: SiteRead | None, ig: InstagramProfile | None) -> dict[str, Any]:
     """What the Company Verification prompt's {{company.*}} placeholders are filled from."""
     return {
+        "pages": [{"url": p["url"], "text": p.get("text") or ""} for p in site.pages] if site and site.reached else [],
         "name": company.name,
         "domain": company.domain,
         "location": ", ".join(p for p in (company.city, company.state) if p),
@@ -92,6 +93,8 @@ async def research_companies(
     scorer: CompanyScorer | None,
     threshold: int,
     prompt: PromptSpec | None = None,
+    max_pages: int = AI_MAX_PAGES,
+    max_seconds: float = AI_BUDGET_SECONDS,
 ) -> ResearchSummary:
     summary = ResearchSummary()
     gate = asyncio.Semaphore(READ_CONCURRENCY)
@@ -101,7 +104,8 @@ async def research_companies(
         if not target:
             return None
         async with gate:
-            return await reader.read(target)
+            # With Claude, only the homepage now: Claude chooses each further page (see decide).
+            return await reader.read(target, max_pages=1) if scorer is not None else await reader.read(target)
 
     sites = await asyncio.gather(*(read(c) for c in companies))
 
@@ -125,8 +129,35 @@ async def research_companies(
 
     places_by_search = bool([p for p in icp.get("places") or [] if p.strip()])
 
+    async def read_with_claude(company: Company, site: SiteRead, ig: InstagramProfile | None):
+        """Score from the homepage; while Claude asks for another page (and the limits allow), read it
+        and score again. Returns the last result and the pages it chose, in order, with its reasons."""
+        chosen: list[dict] = []
+        while True:
+            more = (
+                MoreReading(site.candidates, len(site.pages), max_pages)
+                if reader.can_read_more(site, max_pages, max_seconds)
+                else None
+            )
+            result = await scorer.score(icp, profile, _score_evidence(company, site, ig), prompt, more)
+            summary.claude_calls += 1
+            summary.claude_model = result.model
+            summary.input_tokens += result.input_tokens
+            summary.output_tokens += result.output_tokens
+            if result.error or more is None or not result.next_page:
+                return result, chosen
+            page = await reader.read_more(site, result.next_page, result.next_reason, max_pages, max_seconds)
+            chosen.append({"url": result.next_page, "reason": result.next_reason, "read": page is not None})
+            if page is None:
+                # It couldn't be read: ask once more without it, then stop.
+                if len([c for c in chosen if not c["read"]]) > 1:
+                    return result, chosen
+
     async def decide(company: Company, site: SiteRead | None) -> None:
         ig = profiles.get(handles.get(company.id, ""))
+        reading = None
+        if scorer is not None and site is not None and site.reached:
+            reading = await read_with_claude(company, site, ig)
         rule = check(icp, _evidence(company, site, ig), places_by_search=places_by_search)
         company.rule_fit = rule.fit
         company.rule_detail = {"reason": rule.reason, "hits": rule.hits, "skipped": rule.skipped}
@@ -134,7 +165,8 @@ async def research_companies(
             "website": None if site is None else {
                 "outcome": site.outcome, "via": site.via, "url": site.resolved_url, "title": site.title,
                 "text": site.text, "detail": site.detail,
-                # Full page texts go to eo_company_pages; only where they came from is kept here.
+                # Full page texts go to eo_company_pages; only where they came from is kept here,
+                # with why Claude chose each page after the homepage.
                 "pages": [{k: v for k, v in page.items() if k != "text"} for page in site.pages],
             },
             "socials": {k: v for k, v in {
@@ -152,25 +184,39 @@ async def research_companies(
             summary.posts[company.id] = ig.posts
         company.researched_at = datetime.now(UTC)
 
-        unread = "" if site and site.reached else " (their website couldn't be read)"
-        if not rule.fit:
-            status, reason = "not_fit", rule.reason + unread
-            company.score, company.score_detail = None, None
-        elif scorer is None:
-            status, reason = "qualified", f"Passes the ICP's rule: {rule.reason}. Not scored: ANTHROPIC_API_KEY is not set"
-        else:
-            result = await scorer.score(icp, profile, _score_evidence(company, site, ig), prompt)
-            summary.claude_calls += 1
-            summary.claude_model = result.model
-            summary.input_tokens += result.input_tokens
-            summary.output_tokens += result.output_tokens
+        def keep_score(result, chosen: list[dict]) -> None:
             company.score = result.score
             company.score_detail = {
                 "summary": result.summary, "reasons": result.reasons, "concerns": result.concerns,
                 "model": result.model, "error": result.error,
                 "prompt_version_id": prompt.version_id if prompt else None,
                 "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
+                # The pages Claude asked to read after the homepage, in order, and why.
+                "reading": chosen,
             }  # fmt: skip
+
+        unread = "" if site and site.reached else " (their website couldn't be read)"
+        if not rule.fit:
+            status, reason = "not_fit", rule.reason + unread
+            # Claude read the site before the rule ran: keep what it said, the rule still decides.
+            if reading is None:
+                company.score, company.score_detail = None, None
+            else:
+                keep_score(*reading)
+        elif scorer is None:
+            status, reason = "qualified", f"Passes the ICP's rule: {rule.reason}. Not scored: ANTHROPIC_API_KEY is not set"
+        else:
+            if reading is None:
+                # The site couldn't be read: Claude scores from Instagram and Apollo alone.
+                result = await scorer.score(icp, profile, _score_evidence(company, site, ig), prompt)
+                summary.claude_calls += 1
+                summary.claude_model = result.model
+                summary.input_tokens += result.input_tokens
+                summary.output_tokens += result.output_tokens
+                keep_score(result, [])
+            else:
+                result, chosen = reading
+                keep_score(result, chosen)
             if result.error:
                 status, reason = "error", result.error
             elif result.score is not None and result.score >= threshold:

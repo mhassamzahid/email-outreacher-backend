@@ -211,6 +211,8 @@ class Settings(Base):
         CheckConstraint("good_examples between 0 and 10", name="good_examples"),
         CheckConstraint("bad_examples between 0 and 10", name="bad_examples"),
         CheckConstraint("improve_examples between 3 and 50", name="improve_examples"),
+        CheckConstraint("research_max_pages between 1 and 15", name="research_max_pages"),
+        CheckConstraint("research_max_seconds between 30 and 600", name="research_max_seconds"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(ForeignKey("eo_workspaces.id", ondelete="CASCADE"), primary_key=True)
@@ -228,6 +230,10 @@ class Settings(Base):
     good_examples: Mapped[int] = mapped_column(SmallInteger, server_default="3")
     bad_examples: Mapped[int] = mapped_column(SmallInteger, server_default="3")
     improve_examples: Mapped[int] = mapped_column(SmallInteger, server_default="20")
+    # Research: the most pages read per company (homepage included) while Claude chooses the next
+    # page, and the most time spent on one company.
+    research_max_pages: Mapped[int] = mapped_column(SmallInteger, server_default="6")
+    research_max_seconds: Mapped[int] = mapped_column(SmallInteger, server_default="120")
     updated_at: Mapped[datetime] = _updated()
 
 
@@ -379,7 +385,8 @@ class Stakeholder(Base):
 
     __tablename__ = "eo_stakeholders"
     __table_args__ = (
-        CheckConstraint(_in("source", ("apollo", "apify_linkedin")), name="source"),
+        # manual: added by hand or from a CSV (one with an Apollo Contact Id is stored as apollo).
+        CheckConstraint(_in("source", ("apollo", "apify_linkedin", "manual")), name="source"),
         UniqueConstraint("workspace_id", "source", "external_id"),
         Index("eo_stakeholders_business_idx", "workspace_id", "lead_intel_business_id"),
         Index("eo_stakeholders_icp_idx", "workspace_id", "lead_intel_icp_id"),

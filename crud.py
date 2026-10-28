@@ -484,6 +484,53 @@ class StakeholderRepo:
         await self.session.commit()
         return sum(p.external_id not in known for p in people)
 
+    async def save_person(
+        self, workspace_id: UUID, icp_id: UUID | None, person: Any, company: Company | None, origin: str
+    ) -> tuple[Stakeholder, bool]:
+        """Add a person typed in or imported (services.people_csv.PersonRow), or update the one already
+        stored under the same id. Returns (the person, whether they're new). A known email is never
+        replaced by an empty one."""
+        source, external_id = person.external_id
+        values = {
+            "first_name": person.first_name, "last_name": person.last_name, "title": person.title,
+            "seniority": person.seniority or None, "linkedin_url": person.linkedin_url or None,
+            "email": person.email or None, "email_status": person.email_status or None,
+            "has_email": True if person.email else None,
+            "organization_name": (company.name if company else None) or person.company or None,
+            "company_id": company.id if company else None,
+            "lead_intel_business_id": company.lead_intel_business_id if company else None,
+            "lead_intel_icp_id": icp_id or (company.icp_id if company else None),
+            "raw": {
+                "added": origin, "company": person.company, "website": person.website, "phone": person.phone,
+                "city": person.city, "state": person.state, "country": person.country,
+                "company_linkedin_url": person.company_linkedin_url, "facebook_url": person.facebook_url,
+                "twitter_url": person.twitter_url, "apollo_account_id": person.apollo_account_id, "extra": person.extra,
+            },
+        }  # fmt: skip
+        known = await self.session.scalar(
+            select(Stakeholder).where(
+                Stakeholder.workspace_id == workspace_id, Stakeholder.source == source, Stakeholder.external_id == external_id
+            )
+        )
+        if known is None:
+            row = Stakeholder(workspace_id=workspace_id, source=source, external_id=external_id,
+                              revealed_at=func.now() if person.email else None, **values)  # fmt: skip
+            self.session.add(row)
+            await self.session.flush()
+            return row, True
+        # Blank cells never wipe what's stored; what the CSV adds is merged into the stored details.
+        for key, value in values.items():
+            if key == "raw":
+                known.raw = {**(known.raw or {}), **value}
+            elif value not in (None, ""):
+                setattr(known, key, value)
+        if person.email and known.revealed_at is None:
+            known.revealed_at = func.now()
+        return known, False
+
+    async def commit(self) -> None:
+        await self.session.commit()
+
     async def link_lead(self, stakeholder: Stakeholder, lead_id: UUID) -> None:
         stakeholder.lead_id = lead_id
         await self.session.commit()
@@ -704,6 +751,23 @@ class CompanyRepo:
 
     async def get(self, workspace_id: UUID, company_id: UUID) -> Company | None:
         return await self.session.scalar(select(Company).where(Company.workspace_id == workspace_id, Company.id == company_id))
+
+    async def matcher(self, workspace_id: UUID):
+        """A function finding the pipeline company for a domain or name, from one read of the pipeline.
+        The domain is tried first; the name only when it's unique in the workspace."""
+        rows = list(await self.session.scalars(select(Company).where(Company.workspace_id == workspace_id)))
+        by_domain = {c.domain: c for c in rows if c.domain}
+        names: dict[str, list[Company]] = {}
+        for c in rows:
+            names.setdefault(c.name.strip().lower(), []).append(c)
+
+        def find(domain: str | None, name: str | None) -> Company | None:
+            if domain and domain in by_domain:
+                return by_domain[domain]
+            same = names.get((name or "").strip().lower(), [])
+            return same[0] if len(same) == 1 else None
+
+        return find
 
     async def save_pages(self, workspace_id: UUID, company_id: UUID, via: str, pages: list[dict[str, Any]]) -> None:
         """Store the pages read from a company's website; a page read again replaces its old text."""
@@ -977,6 +1041,7 @@ class FeedbackRepo:
 
 
 FEEDBACK_DEFAULTS = {"good_examples": 3, "bad_examples": 3, "improve_examples": 20}
+RESEARCH_DEFAULTS = {"research_max_pages": 6, "research_max_seconds": 120}
 
 
 class SettingsRepo:
@@ -988,16 +1053,33 @@ class SettingsRepo:
     async def workspace_exists(self, workspace_id: UUID) -> bool:
         return (await self.session.get(Workspace, workspace_id)) is not None
 
-    async def feedback(self, workspace_id: UUID) -> dict[str, int]:
-        """How many rated emails are used, falling back to the defaults when the row doesn't exist yet."""
+    async def _get(self, workspace_id: UUID, defaults: dict[str, int]) -> dict[str, int]:
+        """These settings, or their defaults while the workspace has no settings row yet."""
         row = await self.session.get(Settings, workspace_id)
-        return FEEDBACK_DEFAULTS if row is None else {k: getattr(row, k) for k in FEEDBACK_DEFAULTS}
+        return dict(defaults) if row is None else {k: getattr(row, k) for k in defaults}
 
-    async def save_feedback(self, workspace_id: UUID, values: dict[str, int]) -> dict[str, int]:
+    async def _save(self, workspace_id: UUID, values: dict[str, int]) -> None:
         await self.session.execute(
             insert(Settings)
             .values(workspace_id=workspace_id, **values)
             .on_conflict_do_update(index_elements=[Settings.workspace_id], set_={**values, "updated_at": func.now()})
         )
         await self.session.commit()
+        # The row may have been read before this save; read it fresh next time.
+        self.session.expire_all()
+
+    async def feedback(self, workspace_id: UUID) -> dict[str, int]:
+        """How many rated emails are used."""
+        return await self._get(workspace_id, FEEDBACK_DEFAULTS)
+
+    async def save_feedback(self, workspace_id: UUID, values: dict[str, int]) -> dict[str, int]:
+        await self._save(workspace_id, values)
         return await self.feedback(workspace_id)
+
+    async def research(self, workspace_id: UUID) -> dict[str, int]:
+        """How much of a company's website research may read."""
+        return await self._get(workspace_id, RESEARCH_DEFAULTS)
+
+    async def save_research(self, workspace_id: UUID, values: dict[str, int]) -> dict[str, int]:
+        await self._save(workspace_id, values)
+        return await self.research(workspace_id)

@@ -54,6 +54,9 @@ Check the connection and that Lead Intel still has every column we read:
 | POST | `/api/v1/companies/remove` | Take companies out of a workspace (`{companyIds}`); Lead Intel keeps them |
 | GET | `/api/v1/companies/{id}` | One company with every stored field (website text, Instagram profile…) |
 | GET | `/api/v1/stakeholders` | People found at the workspace's companies (`companyId`) |
+| GET | `/api/v1/stakeholders/template.csv` | People CSV template: the columns of Apollo's people export that we use |
+| POST | `/api/v1/stakeholders` | Add one person by hand (`icpId` optional); with an email or LinkedIn URL they become a lead |
+| POST | `/api/v1/stakeholders/import` | Import people from a CSV body in Apollo's export format (`icpId`, `dryRun`); matched to pipeline companies by domain or name; repeats update, not duplicate |
 | POST | `/api/v1/stakeholders/search` | Apollo People Search by company domain, `{companyIds, titles, seniorities}`; 0 credits |
 | POST | `/api/v1/stakeholders/search-icp` | Apollo People Search for a Lead Intel ICP, anywhere: titles, seniorities, company locations, keywords, size, verified-email only, `page`/`perPage` (max 100); 0 credits |
 | POST | `/api/v1/stakeholders/reveal` | Apollo enrichment for `{stakeholderIds}` (max 25): email + LinkedIn, adds them as leads; ~1 credit each, never twice |
@@ -80,6 +83,7 @@ Check the connection and that Lead Intel still has every column we read:
 | GET | `/api/v1/emails/feedback/stats` | Good and bad counts per ICP |
 | POST | `/api/v1/improve/email-prompt` | Claude (Sonnet 5.5) suggests a revised Email Generation prompt for an ICP from its ratings (at least 3); nothing is saved |
 | GET/PUT | `/api/v1/settings/feedback` | How many rated emails Claude learns from: good and bad examples per email (0-10 each, default 3) and rated emails per prompt suggestion (3-50, default 20) |
+| GET/PUT | `/api/v1/settings/research` | How much of a website research reads while Claude picks each next page: most pages per company (1-15, default 6) and most seconds (30-600, default 120) |
 | GET | `/api/v1/usage` | Spend over `days` (default 30): Claude tokens and estimated dollars, Apollo credits, Apify dollars; per provider, per action, and the latest 100 calls |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |

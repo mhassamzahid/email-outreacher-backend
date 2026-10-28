@@ -100,6 +100,8 @@ class LeadContext:
     items: list[Item]
     instruction: str = ""
     examples: list[Example] = field(default_factory=list)
+    # The {{company.*}} placeholders for the lead's company (services.prompts.company_variables).
+    company: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -191,7 +193,7 @@ def variables(
     }
     for key, value in (lead.get("extra") or {}).items():
         out[f"lead.extra.{key}"] = str(value)
-    return out
+    return {**out, **ctx.company}
 
 
 class EmailWriter:

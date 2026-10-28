@@ -10,12 +10,17 @@ whichever project reads it:
 
 When our own fetch can't read the site (it turns plain clients away, or renders only with
 JavaScript), Jina Reader reads it in a real browser instead. Never when robots.txt forbids us.
+
+Read step by step (research with Claude): `read(domain, max_pages=1)` reads only the homepage and
+lists the site's other pages (`candidates`); `read_more(site, url)` then reads one chosen page at a
+time, under the same rules, up to a number of pages and seconds the workspace sets.
 """
 
 import asyncio
 import re
 import time
 from dataclasses import dataclass, field
+from typing import Any
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
@@ -36,6 +41,11 @@ TEXT_LIMIT = 2000
 PAGE_TEXT_LIMIT = 50_000
 # Below this many characters of text, a page probably renders with JavaScript.
 THIN_TEXT = 200
+# Reading step by step, with Claude choosing each next page. Defaults; each workspace sets its own.
+AI_MAX_PAGES = 6
+AI_BUDGET_SECONDS = 120.0
+MAX_CANDIDATES = 40
+NOT_PAGES = re.compile(r"\.(pdf|jpe?g|png|gif|webp|svg|ico|zip|mp4|mov|mp3|css|js|xml|json|docx?|xlsx?)$", re.I)
 
 PRIORITY_PAGES: list[tuple[str, re.Pattern[str]]] = [
     ("contact", re.compile(r"contact|get-?in-?touch|reach-?us|find-?us|book|appointment|quote|estimate|schedule", re.I)),
@@ -65,6 +75,10 @@ class SiteRead:
     pages: list[dict] = field(default_factory=list)  # [{url, role, status, text}]
     socials: dict[str, str] = field(default_factory=dict)  # {"instagram": "https://instagram.com/x", ...}
     detail: str | None = None
+    # Pages on the same site not read yet: [{url, text}] (text is the link's words). See read_more.
+    candidates: list[dict] = field(default_factory=list)
+    # What read_more needs to keep reading politely: robots rules, delay, clock.
+    session: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
     def reached(self) -> bool:
@@ -80,9 +94,11 @@ class _PageParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.text: list[str] = []
         self.links: list[str] = []
+        self.anchors: list[tuple[str, str]] = []  # (href, the link's words)
         self.title = ""
         self._skip = 0
         self._in_title = False
+        self._anchor: tuple[str, list[str]] | None = None
 
     def handle_starttag(self, tag, attrs):
         if tag in self.SKIP:
@@ -93,27 +109,55 @@ class _PageParser(HTMLParser):
             href = dict(attrs).get("href")
             if href:
                 self.links.append(href)
+                self._anchor = (href, [])
 
     def handle_endtag(self, tag):
         if tag in self.SKIP and self._skip:
             self._skip -= 1
         if tag == "title":
             self._in_title = False
+        if tag == "a" and self._anchor:
+            href, words = self._anchor
+            self.anchors.append((href, " ".join(words)[:80]))
+            self._anchor = None
 
     def handle_data(self, data):
         if self._in_title:
             self.title += data
         elif not self._skip and data.strip():
             self.text.append(data.strip())
+            if self._anchor:
+                self._anchor[1].append(data.strip())
 
 
-def parse_html(html: str) -> tuple[str, str, list[str]]:
+def _parse(html: str) -> _PageParser:
     parser = _PageParser()
     try:
         parser.feed(html)
     except Exception:  # noqa: BLE001  (malformed HTML: keep what was parsed)
         pass
+    return parser
+
+
+def parse_html(html: str) -> tuple[str, str, list[str]]:
+    parser = _parse(html)
     return " ".join(parser.text), parser.title.strip(), parser.links
+
+
+def same_site_pages(base_url: str, anchors: list[tuple[str, str]], skip: set[str]) -> list[dict]:
+    """Links to other pages on the same site, with their words: [{url, text}]. No files, no repeats."""
+    host = urlsplit(base_url).netloc
+    out: dict[str, str] = {}
+    for href, words in anchors:
+        url = urljoin(base_url, href).split("#")[0]
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or parts.netloc != host or NOT_PAGES.search(parts.path):
+            continue
+        key = url.rstrip("/")
+        if key in skip or key in out:
+            continue
+        out[key] = words
+    return [{"url": url, "text": words} for url, words in out.items()][:MAX_CANDIDATES]
 
 
 def find_socials(sources: list[str]) -> dict[str, str]:
@@ -191,7 +235,8 @@ class WebsiteReader:
         delay = robots.crawl_delay(ROBOTS_TOKEN) or 0
         return robots, max(MIN_DELAY_SECONDS, float(delay))
 
-    async def read(self, domain_or_url: str) -> SiteRead:
+    async def read(self, domain_or_url: str, max_pages: int = MAX_PAGES) -> SiteRead:
+        """Read a site. With max_pages=1 only the homepage is read; read_more continues from there."""
         domain = normalize_domain(domain_or_url)
         if not domain:
             return SiteRead(domain="", outcome="unreachable", detail="No website")
@@ -224,7 +269,9 @@ class WebsiteReader:
         if homepage is None:
             return await self._with_jina(domain, robots, SiteRead(domain=domain, outcome="unreachable", detail="The site didn't answer"))
 
-        text, title, links = parse_html(homepage.text)
+        parsed = _parse(homepage.text)
+        text, title, links = " ".join(parsed.text), parsed.title.strip(), parsed.links
+        anchors = list(parsed.anchors)
         texts = [text]
         all_links = list(links)
         sources = [homepage.text]
@@ -242,13 +289,15 @@ class WebsiteReader:
                 if pattern.search(parts.path) and url not in {u for u, _ in chosen}:
                     chosen.append((url, role))
                     break
-        for url, role in chosen[: MAX_PAGES - 1]:
+        for url, role in chosen[: max(0, max_pages - 1)]:
             if remaining() <= 0 or not robots.can_fetch(ROBOTS_TOKEN, url):
                 continue
             page = await polite_get(url)
             if page is None or page.status_code >= 400:
                 continue
-            body, _, page_links = parse_html(page.text)
+            page_parsed = _parse(page.text)
+            body, page_links = " ".join(page_parsed.text), page_parsed.links
+            anchors += page_parsed.anchors
             texts.append(body)
             all_links.extend(page_links)
             sources.append(page.text)
@@ -263,6 +312,8 @@ class WebsiteReader:
             title=title,
             pages=pages,
             socials=find_socials([urljoin(home_url, link) for link in all_links] + sources),
+            candidates=same_site_pages(home_url, anchors, {p["url"].rstrip("/") for p in pages}),
+            session={"robots": robots, "delay": delay, "started": self._clock(), "last": self._clock(), "texts": texts},
         )
         if len(result.text) < THIN_TEXT:
             result.outcome = "no_text"
@@ -284,13 +335,74 @@ class WebsiteReader:
         if not text:
             return fallback
         socials = find_socials(page.links + re.findall(r"https?://[^\s)\]>\"']+", page.content))
+        home = page.url or url
         return SiteRead(
             domain=domain,
             outcome="ok",
             via="jina",
-            resolved_url=page.url or url,
+            resolved_url=home,
             text=text,
             title=page.title,
-            pages=[{"url": page.url or url, "role": "homepage", "status": 200, "text": page_text(page.content)}],
+            pages=[{"url": home, "role": "homepage", "status": 200, "text": page_text(page.content)}],
             socials={**fallback.socials, **socials},
+            candidates=same_site_pages(home, [(link, "") for link in page.links], {home.rstrip("/")}),
+            session={"robots": robots, "delay": MIN_DELAY_SECONDS, "started": self._clock(), "last": self._clock(),
+                     "texts": [page.content]},  # fmt: skip
         )
+
+    def can_read_more(self, site: SiteRead, max_pages: int = AI_MAX_PAGES, max_seconds: float = AI_BUDGET_SECONDS) -> bool:
+        s = site.session
+        return (
+            site.reached and bool(s) and bool(site.candidates) and len(site.pages) < max_pages
+            and self._clock() - s["started"] < max_seconds
+        )  # fmt: skip
+
+    async def read_more(
+        self,
+        site: SiteRead,
+        url: str,
+        reason: str = "",
+        max_pages: int = AI_MAX_PAGES,
+        max_seconds: float = AI_BUDGET_SECONDS,
+    ) -> dict | None:
+        """Read one more page of a site already read, politely; None if it can't be read.
+
+        Only a page from site.candidates. The page is added to site.pages (with `reason`), its text to
+        site.text, its links to site.candidates and site.socials.
+        """
+        wanted = url.rstrip("/")
+        match = next((c for c in site.candidates if c["url"].rstrip("/") == wanted), None)
+        if match is None or not self.can_read_more(site, max_pages, max_seconds):
+            return None
+        site.candidates = [c for c in site.candidates if c is not match]
+        s = site.session
+        if not s["robots"].can_fetch(ROBOTS_TOKEN, match["url"]):
+            return None
+        wait = s["delay"] - (self._clock() - s["last"])
+        if wait > 0:
+            await self._sleep(wait)
+        s["last"] = self._clock()
+        if site.via == "jina":
+            if self._jina is None:
+                return None
+            try:
+                got = await self._jina.read(match["url"])
+            except JinaError:
+                return None
+            body, final_url, status, anchors, source = got.content, got.url or match["url"], 200, [(l, "") for l in got.links], got.content
+        else:
+            response = await self._get(match["url"])
+            if response is None or response.status_code >= 400 or "html" not in response.headers.get("content-type", "html"):
+                return None
+            parsed = _parse(response.text)
+            body, final_url, status, anchors, source = " ".join(parsed.text), str(response.url), response.status_code, parsed.anchors, response.text
+        page = {"url": final_url, "role": match["text"] or "page", "status": status, "text": page_text(body), "reason": reason}
+        site.pages.append(page)
+        s["texts"].append(body)
+        site.text = digest(s["texts"])
+        read = {p["url"].rstrip("/") for p in site.pages}
+        site.candidates += [c for c in same_site_pages(final_url, anchors, read) if c["url"].rstrip("/") not in
+                            {x["url"].rstrip("/") for x in site.candidates}]  # fmt: skip
+        site.candidates = site.candidates[:MAX_CANDIDATES]
+        site.socials = {**find_socials([urljoin(final_url, h) for h, _ in anchors] + [source]), **site.socials}
+        return page

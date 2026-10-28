@@ -29,7 +29,7 @@ from dependencies import (
     require_workspace_id,
 )
 from lead_intel import LeadIntelRepo
-from models import Email, Lead, Post
+from models import Company, Email, Lead, Post
 from schemas import (
     EmailLeadOut,
     EmailOut,
@@ -44,6 +44,8 @@ from schemas import (
     GenerateResult,
 )
 from services.claude import cost_usd
+from services.prompts import company_variables
+from services.research import _apollo_facts as apollo_facts
 from services.generation import EmailWriter, Example, Item, LeadContext, PromptVersionSpec
 
 router = APIRouter(prefix="/emails", tags=["emails"])
@@ -53,6 +55,41 @@ LEAD_STATUS = {"draft": "generated", "edited": "generated", "approved": "approve
 
 def _name(lead: Lead) -> str:
     return f"{lead.first_name} {lead.last_name}".strip() or (lead.email or "Unnamed lead")
+
+
+def _company_evidence(company: Company | None, lead: Lead, fields: dict[str, Any] | None) -> dict[str, Any]:
+    """What we know about the lead's company: our research for Apollo companies, Lead Intel's stored
+    fields (read only) for Lead Intel ones, or just what's on the lead."""
+    fields = fields or {}
+    research = (company.research if company else None) or {}
+    site = research.get("website") or {}
+    website_text = site.get("text") if site.get("outcome") == "ok" else None
+    if not website_text and fields.get("site_text"):
+        website_text = "\n".join(x for x in (fields.get("page_title"), " ".join(fields["site_text"].split())[:2000]) if x)
+    ig = research.get("instagram")
+    if ig:
+        ig = {k: v for k, v in ig.items() if k != "raw"}
+    elif fields.get("instagram_handle"):
+        ig = {
+            "handle": fields.get("instagram_handle"), "bio": fields.get("instagram_bio"),
+            "category": fields.get("instagram_category"), "followers": fields.get("instagram_followers"),
+        }  # fmt: skip
+    socials = research.get("socials") or {
+        k: v for k, v in {
+            "instagram": fields.get("instagram_url"), "facebook": fields.get("facebook_url"), "tiktok": fields.get("tiktok_url"),
+        }.items() if v
+    }  # fmt: skip
+    place = (company.city, company.state) if company else ()
+    return {
+        "name": company.name if company else lead.company,
+        "domain": company.domain if company else lead.domain,
+        "location": ", ".join(p for p in place if p),
+        "socials": socials,
+        "website_text": website_text,
+        "instagram": ig,
+        "apollo": apollo_facts(company.raw) if company else {},
+        "summary": ((company.score_detail or {}).get("summary") if company else "") or "",
+    }
 
 
 def _spec(version) -> PromptVersionSpec:
@@ -86,6 +123,7 @@ async def generate(
     counts = await settings.feedback(workspace_id)
     want_good, want_bad = counts["good_examples"], counts["bad_examples"]
     examples_used: dict[UUID, list[UUID]] = {}
+    lead_intel_fields: dict[UUID, dict[str, Any] | None] = {}
 
     # Gather everything from the database first; only the Claude calls run side by side.
     for lead_id in ids:
@@ -105,6 +143,13 @@ async def generate(
         hook_version = await prompts.for_icp(workspace_id, "hook", profile.hook_prompt_id if profile else None)
         email_version = await prompts.for_icp(workspace_id, "email", profile.email_prompt_id if profile else None)
         hook_spec, email_spec = _spec(hook_version), _spec(email_version)
+        # Lead Intel companies weren't researched here: their website and Instagram come from Lead Intel (read only).
+        business_id = (company.lead_intel_business_id if company else None) or lead.lead_intel_business_id
+        has_research = bool(company and company.research)
+        if business_id and not has_research and business_id not in lead_intel_fields:
+            found = await lead_intel.get_company(business_id)
+            lead_intel_fields[business_id] = found["fields"] if found else None
+        fields = lead_intel_fields.get(business_id) if business_id and not has_research else None
         posts = await emails.posts_for(workspace_id, lead, company, max(hook_spec.posts, email_spec.posts))
         if icp_id not in rated:
             # Never the lead's own earlier draft: it's about to be replaced.
@@ -132,6 +177,7 @@ async def generate(
             ],
             instruction=body.instruction,
             examples=[Example(f.rating, f.subject, f.body, f.hook, list(f.tags), f.note) for f in picked],
+            company=company_variables(_company_evidence(company, lead, fields)),
         )  # fmt: skip
         examples_used[lead.id] = [f.email_id for f in picked]
         jobs.append((lead, ctx, hook_spec, email_spec))

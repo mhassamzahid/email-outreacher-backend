@@ -36,9 +36,16 @@ class FakeReader:
         self.sites = sites
         self.read_calls: list[str] = []
 
-    async def read(self, domain):
+    async def read(self, domain, max_pages=4):
         self.read_calls.append(domain)
         return self.sites.get(domain, SiteRead(domain=domain, outcome="unreachable", detail="down"))
+
+    # These sites have no other pages, so Claude is never offered more to read.
+    def can_read_more(self, site, max_pages=6, max_seconds=120):
+        return False
+
+    async def read_more(self, site, url, reason="", max_pages=6, max_seconds=120):
+        return None
 
 
 class FakeApify:
@@ -65,7 +72,7 @@ class FakeScorer:
         self.calls = 0
         self.value, self.error = score, error
 
-    async def score(self, icp, profile, evidence, prompt=None):
+    async def score(self, icp, profile, evidence, prompt=None, more=None):
         from services.scoring import ScoreResult
 
         self.calls += 1
@@ -197,3 +204,45 @@ async def test_scorer_reports_refusals_and_api_errors() -> None:
 
     fake = SimpleNamespace(messages=SimpleNamespace(parse=limited), close=lambda: asyncio.sleep(0))
     assert "rate-limiting" in (await CompanyScorer("k", "m", client=fake).score(ICP, None, {})).error
+
+
+@sync
+async def test_claude_reads_one_page_at_a_time_and_decides_when_to_stop() -> None:
+    from services.scoring import ScoreResult
+
+    class Reader(FakeReader):
+        def can_read_more(self, site, max_pages=6, max_seconds=120):
+            return bool(site.candidates) and len(site.pages) < max_pages
+
+        async def read_more(self, site, url, reason="", max_pages=6, max_seconds=120):
+            match = next((c for c in site.candidates if c["url"] == url), None)
+            if match is None:
+                return None
+            site.candidates.remove(match)
+            page = {"url": url, "role": "about", "status": 200, "text": "We do screen printing", "reason": reason}
+            site.pages.append(page)
+            site.text += " We do screen printing"
+            return page
+
+    class Scorer:
+        def __init__(self):
+            self.offers = []
+
+        async def score(self, icp, profile, evidence, prompt=None, more=None):
+            self.offers.append(None if more is None else [c["url"] for c in more.candidates])
+            asks = len(self.offers) == 1  # first call: wants the About page; second: has enough
+            return ScoreResult(85, "Prints shirts", [], [], "claude-haiku-5-5", input_tokens=100, output_tokens=20,
+                               next_page="https://inkco.com/about" if asks else None,
+                               next_reason="See what they make" if asks else "")  # fmt: skip
+
+    home = site("inkco.com", "Ink Co custom tees")
+    home.candidates = [{"url": "https://inkco.com/about", "text": "About us"}, {"url": "https://inkco.com/blog", "text": "Blog"}]
+    good = company("Ink Co", "inkco.com")
+    scorer = Scorer()
+    summary = await research_companies([good], ICP, None, Reader({"inkco.com": home}), None, scorer, 60)
+
+    assert scorer.offers == [["https://inkco.com/about", "https://inkco.com/blog"], ["https://inkco.com/blog"]]
+    assert good.status == "qualified" and good.score == 85 and summary.claude_calls == 2
+    assert good.score_detail["reading"] == [{"url": "https://inkco.com/about", "reason": "See what they make", "read": True}]
+    assert [p["url"] for p in good.research["website"]["pages"]] == ["https://inkco.com/", "https://inkco.com/about"]
+    assert len(summary.pages[good.id][1]) == 2  # both pages kept with their text, for eo_company_pages

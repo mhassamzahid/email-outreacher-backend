@@ -747,3 +747,58 @@ class FeedbackSettings(ApiModel):
     good_examples: int = Field(ge=0, le=10)
     bad_examples: int = Field(ge=0, le=10)
     improve_examples: int = Field(ge=3, le=50)
+
+
+class ResearchSettings(ApiModel):
+    """How much of a company's website research reads while Claude chooses each next page."""
+
+    research_max_pages: int = Field(ge=1, le=15)
+    research_max_seconds: int = Field(ge=30, le=600)
+
+
+# ---------- People added by hand or from a CSV ----------
+
+
+class PersonIn(ApiModel):
+    """One person typed in. Same fields as the CSV template (Apollo's export columns)."""
+
+    icp_id: UUID | None = None
+    first_name: str = Field(default="", max_length=100)
+    last_name: str = Field(default="", max_length=100)
+    title: str = Field(default="", max_length=200)
+    company: str = Field(default="", max_length=200)
+    email: str = Field(default="", max_length=320)
+    email_status: str = Field(default="", max_length=40)
+    seniority: str = Field(default="", max_length=40)
+    linkedin_url: str = Field(default="", max_length=500)
+    website: str = Field(default="", max_length=500)
+    city: str = Field(default="", max_length=100)
+    state: str = Field(default="", max_length=100)
+    country: str = Field(default="", max_length=100)
+    phone: str = Field(default="", max_length=60)
+    apollo_contact_id: str = Field(default="", max_length=100)
+
+
+class PersonAdded(ApiModel):
+    person: StakeholderOut
+    new: bool
+    lead_created: bool
+    company_name: str | None
+
+
+class PeopleRowError(ApiModel):
+    row: int
+    reason: str
+
+
+class PeopleImportResult(ApiModel):
+    dry_run: bool
+    total_rows: int
+    valid: int
+    added: int
+    updated: int
+    leads_created: int
+    linked_to_companies: int
+    duplicates_in_file: int
+    errors: list[PeopleRowError]
+    columns: dict[str, str]

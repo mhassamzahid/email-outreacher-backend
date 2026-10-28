@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 KINDS = ("verify", "hook", "email", "score")
+PAGE_CHARS = 4000  # per page, when pages are shown one by one
 PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
 DEFAULT_MODEL = "claude-haiku-5-5"
 
@@ -192,7 +193,6 @@ def verify_variables(
         f"- Searched as: {_lines(icp.get('search_terms'))}",
         f"- Places: {_lines(icp.get('places'))}",
     ]
-    ig = evidence.get("instagram")
     return {
         "icp.name": icp.get("name") or "",
         "icp.industry": icp.get("industry") or "",
@@ -201,11 +201,35 @@ def verify_variables(
         "icp.pains": profile.get("pains") or "",
         "icp.offer": profile.get("offer") or "",
         "icp.rules": "\n".join(rules),
+        **company_variables(evidence),
+    }
+
+
+def _website(evidence: dict[str, Any]) -> str:
+    """Each page read on its own, labelled with its address; else the combined text."""
+    pages = [p for p in evidence.get("pages") or [] if (p.get("text") or "").strip()]
+    if pages:
+        return "\n\n".join(
+            f'<page number="{i}" url="{p["url"]}">\n{" ".join(p["text"].split())[:PAGE_CHARS]}\n</page>'
+            for i, p in enumerate(pages, 1)
+        )
+    return evidence.get("website_text") or "(couldn't be read)"
+
+
+def company_variables(evidence: dict[str, Any]) -> dict[str, str]:
+    """The {{company.*}} placeholders, for any prompt kind, from what we know about a company.
+
+    evidence: name, domain, location, socials {network: url}, pages [{url, text}] or website_text,
+    instagram (profile dict), apollo (company facts), summary (Company Verification's verdict).
+    """
+    ig = evidence.get("instagram")
+    return {
         "company.name": evidence.get("name") or "",
         "company.domain": evidence.get("domain") or "(no website)",
         "company.location": evidence.get("location") or "(unknown)",
         "company.socials": ", ".join(f"{k}: {v}" for k, v in (evidence.get("socials") or {}).items()) or "(none found)",
         "company.apollo": json.dumps(evidence.get("apollo") or {}, indent=2, ensure_ascii=False),
         "company.instagram": json.dumps(ig, indent=2, ensure_ascii=False) if ig else "(not found)",
-        "company.website": evidence.get("website_text") or "(couldn't be read)",
+        "company.website": _website(evidence),
+        "company.summary": evidence.get("summary") or "",
     }
