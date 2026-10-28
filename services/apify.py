@@ -4,7 +4,7 @@ Each call starts a run, waits for it (up to RUN_TIMEOUT), then reads its dataset
 result; the run's actual cost (`usageTotalUsd`) is returned so it can be logged as spend.
 
 Actors (all public, no cookies needed):
-  harvestapi~linkedin-company-employees  ~$4 per 1,000 profiles in Short mode
+  harvestapi~linkedin-company-employees  $3 per 1,000 Basic profiles ("Short" mode) on Free and Starter
   harvestapi~linkedin-profile-posts      ~$2 per 1,000 posts
   apify~instagram-scraper                ~$1.50–2.70 per 1,000 results, by plan
 """

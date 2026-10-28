@@ -265,7 +265,7 @@ async def find_stakeholders(
     apollo: ApolloClient | None = Depends(get_optional_apollo),
     apify: ApifyClient | None = Depends(get_optional_apify),
 ) -> StakeholderSearchResult:
-    """Find people at qualified companies: Apollo by website domain (free search), or LinkedIn
+    """Find people at qualified companies: Apollo by website domain (paid Apollo plans only; no credits), or LinkedIn
     through Apify by company name (paid per person). Only qualified companies are searched."""
     if bad := [s for s in body.seniorities if s not in SENIORITIES]:
         raise HTTPException(status_code=422, detail=f"Unknown seniorities: {', '.join(bad)}")

@@ -57,8 +57,8 @@ Check the connection and that Lead Intel still has every column we read:
 | GET | `/api/v1/stakeholders/template.csv` | People CSV template: the columns of Apollo's people export that we use |
 | POST | `/api/v1/stakeholders` | Add one person by hand (`icpId` optional); with an email or LinkedIn URL they become a lead |
 | POST | `/api/v1/stakeholders/import` | Import people from a CSV body in Apollo's export format (`icpId`, `dryRun`); matched to pipeline companies by domain or name; repeats update, not duplicate |
-| POST | `/api/v1/stakeholders/search` | Apollo People Search by company domain, `{companyIds, titles, seniorities}`; 0 credits |
-| POST | `/api/v1/stakeholders/search-icp` | Apollo People Search for a Lead Intel ICP, anywhere: titles, seniorities, company locations, keywords, size, verified-email only, `page`/`perPage` (max 100); 0 credits |
+| POST | `/api/v1/stakeholders/search` | Apollo People Search by company domain, `{companyIds, titles, seniorities}`; 0 credits, paid Apollo plans only |
+| POST | `/api/v1/stakeholders/search-icp` | Apollo People Search for a Lead Intel ICP, anywhere: titles, seniorities, company locations, keywords, size, verified-email only, `page`/`perPage` (max 100); 0 credits, paid Apollo plans only |
 | POST | `/api/v1/stakeholders/reveal` | Apollo enrichment for `{stakeholderIds}` (max 25): email + LinkedIn, adds them as leads; ~1 credit each, never twice |
 | POST | `/api/v1/stakeholders/search-linkedin` | People at companies on LinkedIn via Apify (`harvestapi~linkedin-company-employees`), full names + LinkedIn, no emails; ~$0.004/person |
 | POST | `/api/v1/stakeholders/add-as-leads` | Turn found people with a LinkedIn URL or email into leads; free |
