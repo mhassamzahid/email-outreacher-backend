@@ -3,11 +3,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from config import get_settings
-from crud import IcpProfileRepo, PromptRepo
+from crud import IcpProfileRepo, ProductRepo, PromptRepo
 from dependencies import (
     get_icp_profile_repo,
     get_lead_intel_icp_writer,
     get_lead_intel_repo,
+    get_product_repo,
     get_prompt_repo,
     get_workspace_id,
     require_workspace_id,
@@ -96,6 +97,7 @@ async def save_icp_profile(
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
     profiles: IcpProfileRepo = Depends(get_icp_profile_repo),
     prompts: PromptRepo = Depends(get_prompt_repo),
+    products: ProductRepo = Depends(get_product_repo),
 ) -> IcpProfileOut:
     """Save a workspace's outreach settings for a Lead Intel ICP. Writes `outreach.eo_icp_profiles` only."""
     if not await profiles.workspace_exists(workspace_id):
@@ -109,5 +111,7 @@ async def save_icp_profile(
         prompt = await prompts.get(workspace_id, prompt_id)
         if prompt is None or prompt.kind != kind:
             raise HTTPException(status_code=422, detail=f"That {kind} prompt isn't one of this workspace's")
+    if body.product_id and not await products.get(workspace_id, body.product_id):
+        raise HTTPException(status_code=422, detail="That product isn't one of this workspace's")
     profile = await profiles.upsert(workspace_id, icp_id, body.model_dump())
     return IcpProfileOut.model_validate(profile)

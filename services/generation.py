@@ -23,7 +23,7 @@ import anthropic
 from pydantic import BaseModel
 
 from services.claude import error_message
-from services.prompts import render
+from services.prompts import product_variables, render
 
 MIN_MAX_TOKENS = 4096
 DEFAULT_POSTS = 15  # when a prompt version doesn't set max_posts
@@ -193,7 +193,7 @@ def variables(
     }
     for key, value in (lead.get("extra") or {}).items():
         out[f"lead.extra.{key}"] = str(value)
-    return {**out, **ctx.company}
+    return {**out, **ctx.company, **product_variables(profile.get("product"))}
 
 
 class EmailWriter:

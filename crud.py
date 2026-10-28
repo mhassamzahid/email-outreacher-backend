@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
-    Company, CompanyPage, Email, EmailFeedback, IcpProfile, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
+    Company, CompanyPage, Email, EmailFeedback, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
     Workspace, WorkspaceCompany,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
@@ -1083,3 +1083,56 @@ class SettingsRepo:
     async def save_research(self, workspace_id: UUID, values: dict[str, int]) -> dict[str, int]:
         await self._save(workspace_id, values)
         return await self.research(workspace_id)
+
+
+PRODUCT_FIELDS = ("name", "description", "value", "proof", "offer", "cta", "url")
+
+
+class ProductRepo:
+    """What the workspace sells. `outreach.eo_products` only."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def workspace_exists(self, workspace_id: UUID) -> bool:
+        return (await self.session.get(Workspace, workspace_id)) is not None
+
+    async def list(self, workspace_id: UUID) -> list[Product]:
+        query = select(Product).where(Product.workspace_id == workspace_id).order_by(func.lower(Product.name))
+        return list(await self.session.scalars(query))
+
+    async def get(self, workspace_id: UUID, product_id: UUID) -> Product | None:
+        product = await self.session.get(Product, product_id)
+        return product if product and product.workspace_id == workspace_id else None
+
+    async def name_taken(self, workspace_id: UUID, name: str, except_id: UUID | None = None) -> bool:
+        query = select(Product.id).where(Product.workspace_id == workspace_id, func.lower(Product.name) == name.lower())
+        if except_id:
+            query = query.where(Product.id != except_id)
+        return (await self.session.scalar(query)) is not None
+
+    async def create(self, workspace_id: UUID, values: dict[str, str]) -> Product:
+        product = Product(workspace_id=workspace_id, **values)
+        self.session.add(product)
+        await self.session.commit()
+        await self.session.refresh(product)
+        return product
+
+    async def update(self, product: Product, values: dict[str, str]) -> Product:
+        for key, value in values.items():
+            setattr(product, key, value)
+        product.updated_at = datetime.now(UTC)
+        await self.session.commit()
+        await self.session.refresh(product)
+        return product
+
+    async def used_by(self, workspace_id: UUID, product_id: UUID) -> list[UUID]:
+        """The Lead Intel ICP ids whose outreach settings chose this product."""
+        query = select(IcpProfile.lead_intel_icp_id).where(
+            IcpProfile.workspace_id == workspace_id, IcpProfile.product_id == product_id
+        )
+        return list(await self.session.scalars(query))
+
+    async def delete(self, product: Product) -> None:
+        await self.session.delete(product)
+        await self.session.commit()

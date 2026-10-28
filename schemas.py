@@ -37,6 +37,8 @@ class IcpProfileIn(ApiModel):
     words_to_avoid: str = ""
     hook_guidance: str = ""
     enabled_sources: list[str] = []
+    # What we sell to this ICP (eo_products), or none.
+    product_id: UUID | None = None
     # Null uses the workspace's default prompt of that kind.
     verify_prompt_id: UUID | None = None
     hook_prompt_id: UUID | None = None
@@ -802,3 +804,24 @@ class PeopleImportResult(ApiModel):
     duplicates_in_file: int
     errors: list[PeopleRowError]
     columns: dict[str, str]
+
+
+# ---------- Products ----------
+
+
+class ProductIn(ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    value: str = Field(default="", max_length=2000)
+    proof: str = Field(default="", max_length=4000)
+    offer: str = Field(default="", max_length=1000)
+    cta: str = Field(default="", max_length=500)
+    url: str = Field(default="", max_length=500)
+
+
+class ProductOut(ProductIn):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    # The ICPs that chose this product (Lead Intel ICP ids).
+    icp_ids: list[UUID] = []

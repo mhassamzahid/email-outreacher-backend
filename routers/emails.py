@@ -16,13 +16,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from crud import EmailRepo, FeedbackRepo, IcpProfileRepo, PromptRepo, ProviderCallRepo, SettingsRepo
+from crud import PRODUCT_FIELDS, EmailRepo, FeedbackRepo, IcpProfileRepo, ProductRepo, PromptRepo, ProviderCallRepo, SettingsRepo
 from dependencies import (
     get_email_repo,
     get_feedback_repo,
     get_icp_profile_repo,
     get_lead_intel_repo,
     get_optional_writer,
+    get_product_repo,
     get_prompt_repo,
     get_provider_call_repo,
     get_settings_repo,
@@ -109,6 +110,7 @@ async def generate(
     calls: ProviderCallRepo = Depends(get_provider_call_repo),
     feedback: FeedbackRepo = Depends(get_feedback_repo),
     settings: SettingsRepo = Depends(get_settings_repo),
+    products: ProductRepo = Depends(get_product_repo),
     writer: EmailWriter | None = Depends(get_optional_writer),
 ) -> GenerateResult:
     """Draft an email for each lead. Leads without an ICP are skipped."""
@@ -140,6 +142,7 @@ async def generate(
             outcomes[lead_id] = GenerateOutcome(lead_id=lead_id, name=_name(lead), status="skipped", reason="No ICP for this lead")
             continue
         profile = (await profiles.get_many(workspace_id, [icp_id])).get(icp_id)
+        product = await products.get(workspace_id, profile.product_id) if profile and profile.product_id else None
         hook_version = await prompts.for_icp(workspace_id, "hook", profile.hook_prompt_id if profile else None)
         email_version = await prompts.for_icp(workspace_id, "email", profile.email_prompt_id if profile else None)
         hook_spec, email_spec = _spec(hook_version), _spec(email_version)
@@ -163,10 +166,11 @@ async def generate(
         ctx = LeadContext(
             icp=icp,
             profile=None if profile is None else {
-                k: getattr(profile, k) for k in (
+                **{k: getattr(profile, k) for k in (
                     "description", "titles", "pains", "offer", "proof", "cta", "tone", "example_email",
                     "words_to_avoid", "hook_guidance",
-                )
+                )},
+                "product": None if product is None else {k: getattr(product, k) for k in PRODUCT_FIELDS},
             },
             lead={
                 "first_name": lead.first_name, "last_name": lead.last_name, "title": lead.title,

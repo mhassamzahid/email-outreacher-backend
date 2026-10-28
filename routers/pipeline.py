@@ -15,7 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import get_settings
-from crud import CompanyRepo, IcpProfileRepo, PostRepo, PromptRepo, ProviderCallRepo, SettingsRepo, StakeholderRepo
+from crud import PRODUCT_FIELDS, CompanyRepo, IcpProfileRepo, PostRepo, ProductRepo, PromptRepo, ProviderCallRepo, SettingsRepo, StakeholderRepo
 from dependencies import (
     get_company_repo,
     get_icp_profile_repo,
@@ -24,6 +24,7 @@ from dependencies import (
     get_optional_apollo,
     get_optional_scorer,
     get_post_repo,
+    get_product_repo,
     get_prompt_repo,
     get_provider_call_repo,
     get_settings_repo,
@@ -153,6 +154,7 @@ async def research(
     posts: PostRepo = Depends(get_post_repo),
     calls: ProviderCallRepo = Depends(get_provider_call_repo),
     workspace_settings: SettingsRepo = Depends(get_settings_repo),
+    products: ProductRepo = Depends(get_product_repo),
     reader: WebsiteReader = Depends(get_website_reader),
     apify: ApifyClient | None = Depends(get_optional_apify),
     scorer: CompanyScorer | None = Depends(get_optional_scorer),
@@ -180,7 +182,11 @@ async def research(
         icp = await _icp(lead_intel, icp_id)
         profile_rows = await profiles.get_many(workspace_id, [icp_id])
         profile = profile_rows.get(icp_id)
-        profile_dict = None if profile is None else {"description": profile.description, "pains": profile.pains, "offer": profile.offer}
+        product = await products.get(workspace_id, profile.product_id) if profile and profile.product_id else None
+        profile_dict = None if profile is None else {
+            "description": profile.description, "pains": profile.pains, "offer": profile.offer,
+            "product": None if product is None else {k: getattr(product, k) for k in PRODUCT_FIELDS},
+        }  # fmt: skip
         version = await prompts.for_icp(workspace_id, "verify", profile.verify_prompt_id if profile else None)
         spec = None if version is None else PromptSpec(
             version.system_prompt, version.user_prompt, version.model, version.max_tokens, str(version.id)

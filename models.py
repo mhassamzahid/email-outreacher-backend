@@ -315,6 +315,8 @@ class IcpProfile(Base):
     hook_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
     email_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
     verify_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
+    # What we sell to this ICP (eo_products). Its details fill the {{product.*}} placeholders.
+    product_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_products.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
 
@@ -652,5 +654,24 @@ class EmailFeedback(Base):
     subject: Mapped[str] = mapped_column(Text, server_default="")
     body: Mapped[str] = mapped_column(Text, server_default="")
     hook: Mapped[str] = mapped_column(Text, server_default="")
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _updated()
+
+
+class Product(Base):
+    """Something the workspace sells. Each ICP picks the one it's offered (IcpProfile.product_id)."""
+
+    __tablename__ = "eo_products"
+    __table_args__ = (Index("eo_products_workspace_name_key", "workspace_id", text("lower(name)"), unique=True),)
+
+    id: Mapped[UUID] = _uuid_pk()
+    workspace_id: Mapped[UUID] = _workspace()
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text, server_default="")  # what it is
+    value: Mapped[str] = mapped_column(Text, server_default="")  # what it does for the customer
+    proof: Mapped[str] = mapped_column(Text, server_default="")  # results we can claim, used word for word
+    offer: Mapped[str] = mapped_column(Text, server_default="")  # pricing or the offer, e.g. "first month free"
+    cta: Mapped[str] = mapped_column(Text, server_default="")  # the next step we ask for
+    url: Mapped[str] = mapped_column(Text, server_default="")
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()

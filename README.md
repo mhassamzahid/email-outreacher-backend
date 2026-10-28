@@ -47,7 +47,7 @@ Check the connection and that Lead Intel still has every column we read:
 | GET | `/api/v1/icps` | Lead Intel ICPs with company counts and the outreach profile |
 | POST | `/api/v1/icps` | Add an ICP to Lead Intel's `icps` table (Lead Intel's fields; insert-only, recorded as `LEAD_INTEL_ICP_CREATED_BY`) |
 | GET | `/api/v1/icps/{id}` | One ICP |
-| PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP, including its verify, hook and email prompt choices (writes `outreach.eo_icp_profiles` only) |
+| PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP, including its product and its verify, hook and email prompt choices (writes `outreach.eo_icp_profiles` only) |
 | GET | `/api/v1/icps/{id}/companies` | Contactable companies for an ICP (`q`, `limit`, `offset`) |
 | GET | `/api/v1/companies` | Contactable Lead Intel companies (`icpId`, `noIcp`, `inWorkspace`, `q`, `limit`, `offset`); with `X-Workspace-Id` each has `importedAt` |
 | POST | `/api/v1/companies/import` | Pull Lead Intel companies into a workspace: `{companyIds}` or `{icpId}` (writes `eo_workspace_companies` only) |
@@ -84,6 +84,8 @@ Check the connection and that Lead Intel still has every column we read:
 | POST | `/api/v1/improve/email-prompt` | Claude (Sonnet 5.5) suggests a revised Email Generation prompt for an ICP from its ratings (at least 3); nothing is saved |
 | GET/PUT | `/api/v1/settings/feedback` | How many rated emails Claude learns from: good and bad examples per email (0-10 each, default 3) and rated emails per prompt suggestion (3-50, default 20) |
 | GET/PUT | `/api/v1/settings/research` | How much of a website research reads while Claude picks each next page: most pages per company (1-15, default 6) and most seconds (30-600, default 120) |
+| GET/POST | `/api/v1/products` | What the workspace sells (name, description, value, proof, offer, call to action, link), with the ICPs selling each |
+| PUT/DELETE | `/api/v1/products/{id}` | Edit a product; delete one no ICP sells (409 otherwise) |
 | GET | `/api/v1/usage` | Spend over `days` (default 30): Claude tokens and estimated dollars, Apollo credits, Apify dollars; per provider, per action, and the latest 100 calls |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |

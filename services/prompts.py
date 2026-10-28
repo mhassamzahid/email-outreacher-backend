@@ -202,6 +202,7 @@ def verify_variables(
         "icp.offer": profile.get("offer") or "",
         "icp.rules": "\n".join(rules),
         **company_variables(evidence),
+        **product_variables(profile.get("product")),
     }
 
 
@@ -233,3 +234,9 @@ def company_variables(evidence: dict[str, Any]) -> dict[str, str]:
         "company.website": _website(evidence),
         "company.summary": evidence.get("summary") or "",
     }
+
+
+def product_variables(product: dict[str, Any] | None) -> dict[str, str]:
+    """The {{product.*}} placeholders, from the ICP's product (empty when it has none)."""
+    product = product or {}
+    return {f"product.{key}": product.get(key) or "" for key in ("name", "description", "value", "proof", "offer", "cta", "url")}

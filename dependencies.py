@@ -14,6 +14,7 @@ from crud import (
     IcpProfileRepo,
     LeadRepo,
     PostRepo,
+    ProductRepo,
     PromptRepo,
     SettingsRepo,
     ProviderCallRepo,
@@ -102,6 +103,10 @@ async def get_optional_anthropic() -> AsyncIterator[anthropic.AsyncAnthropic | N
 
 def get_settings_repo(session: AsyncSession = Depends(get_session)) -> SettingsRepo:
     return SettingsRepo(session)
+
+
+def get_product_repo(session: AsyncSession = Depends(get_session)) -> ProductRepo:
+    return ProductRepo(session)
 
 
 def get_prompt_repo(session: AsyncSession = Depends(get_session)) -> PromptRepo:
