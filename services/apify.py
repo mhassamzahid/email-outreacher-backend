@@ -22,6 +22,7 @@ BASE_URL = "https://api.apify.com/v2"
 EMPLOYEES_ACTOR = "harvestapi~linkedin-company-employees"
 LINKEDIN_POSTS_ACTOR = "harvestapi~linkedin-profile-posts"
 INSTAGRAM_ACTOR = "apify~instagram-scraper"
+INSTAGRAM_PROFILE_ACTOR = "apify~instagram-profile-scraper"
 
 RUN_TIMEOUT = 300  # seconds to wait for a run before giving up on it
 TERMINAL = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
@@ -65,6 +66,19 @@ class FetchedPost:
     is_repost: bool
     # Which input this post belongs to: a LinkedIn profile slug, or an Instagram username.
     owner_key: str | None
+    raw: dict[str, Any]
+
+
+@dataclass
+class InstagramProfile:
+    handle: str
+    full_name: str
+    bio: str
+    category: str | None
+    followers: int | None
+    private: bool
+    verified: bool
+    external_url: str | None
     raw: dict[str, Any]
 
 
@@ -274,3 +288,29 @@ class ApifyClient:
                 )
             )
         return posts, result
+
+    async def instagram_profiles(self, handles: list[str]) -> tuple[dict[str, InstagramProfile], RunResult]:
+        """Profiles (bio, category, followers) for these usernames, keyed by lower-case handle.
+
+        The same actor Lead Intel uses. Handles come from the company's own website, never a search.
+        """
+        wanted = list(dict.fromkeys(h.lower().lstrip("@") for h in handles if h))
+        result = await self.run(INSTAGRAM_PROFILE_ACTOR, {"usernames": wanted}, len(wanted) + 5)
+        profiles: dict[str, InstagramProfile] = {}
+        for item in result.items:
+            handle = (item.get("username") or "").lower()
+            if not handle or item.get("error"):
+                continue
+            followers = item.get("followersCount")
+            profiles[handle] = InstagramProfile(
+                handle=handle,
+                full_name=item.get("fullName") or "",
+                bio=item.get("biography") or "",
+                category=item.get("businessCategoryName"),
+                followers=int(followers) if isinstance(followers, (int, float)) else None,
+                private=bool(item.get("private")),
+                verified=bool(item.get("verified")),
+                external_url=item.get("externalUrl"),
+                raw={k: v for k, v in item.items() if k not in ("latestPosts", "latestIgtvVideos", "relatedProfiles")},
+            )
+        return profiles, result

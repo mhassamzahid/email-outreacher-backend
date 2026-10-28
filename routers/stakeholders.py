@@ -94,7 +94,7 @@ async def search_linkedin(
         try:
             people, run = await apify.company_employees(company["display_name"], titles, body.max_per_company)
         except ApifyError as exc:
-            await calls.record(workspace_id, "apify", EMPLOYEES_ACTOR, "failed")
+            await calls.record(workspace_id, "apify", EMPLOYEES_ACTOR, "failed", action="Find stakeholders")
             results.append(CompanySearchResult(company_id=company_id, name=name, status="failed", reason=exc.message))
             if exc.status in STOP_STATUSES | {402}:
                 error = exc.message
@@ -102,7 +102,7 @@ async def search_linkedin(
         total_cost += run.cost_usd or 0
         await calls.record(
             workspace_id, "apify", EMPLOYEES_ACTOR, "succeeded",
-            key=f"apify:run:{run.run_id}" if run.run_id else None, cost_usd=run.cost_usd,
+            key=f"apify:run:{run.run_id}" if run.run_id else None, cost_usd=run.cost_usd, action="Find stakeholders",
         )  # fmt: skip
         new = await stakeholders.save_employees(workspace_id, company_id, people)
         results.append(CompanySearchResult(company_id=company_id, name=name, status="searched", found=len(people), new=new))
@@ -199,9 +199,9 @@ async def search_by_icp(
             email_statuses=["verified"] if body.verified_email_only else None,
         )
     except ApolloError as exc:
-        await calls.record(workspace_id, "apollo", "mixed_people/api_search", "failed")
+        await calls.record(workspace_id, "apollo", "mixed_people/api_search", "failed", action="Search people by ICP")
         return IcpSearchResult(found=0, new=0, total_at_apollo=None, page=body.page, error=exc.message)
-    await calls.record(workspace_id, "apollo", "mixed_people/api_search", "succeeded", credits=0)
+    await calls.record(workspace_id, "apollo", "mixed_people/api_search", "succeeded", credits=0, action="Search people by ICP")
     new = await stakeholders.save_found(workspace_id, None, people, icp_id=body.icp_id)
     return IcpSearchResult(found=len(people), new=new, total_at_apollo=total, page=body.page)
 
@@ -254,12 +254,12 @@ async def search(
         try:
             people, total = await apollo.search_people(company["domain"], titles, body.seniorities)
         except ApolloError as exc:
-            await calls.record(workspace_id, "apollo", "mixed_people/api_search", "failed")
+            await calls.record(workspace_id, "apollo", "mixed_people/api_search", "failed", action="Find stakeholders")
             results.append(CompanySearchResult(company_id=company_id, name=name, status="failed", reason=exc.message))
             if exc.status in STOP_STATUSES:
                 error = exc.message
             continue
-        await calls.record(workspace_id, "apollo", "mixed_people/api_search", "succeeded", credits=0)
+        await calls.record(workspace_id, "apollo", "mixed_people/api_search", "succeeded", credits=0, action="Find stakeholders")
         new = await stakeholders.save_found(workspace_id, company_id, people)
         results.append(
             CompanySearchResult(
@@ -312,14 +312,14 @@ async def reveal(
             else:
                 person = await apollo.reveal(s.external_id)
         except ApolloError as exc:
-            await calls.record(workspace_id, "apollo", "people/match", "failed")
+            await calls.record(workspace_id, "apollo", "people/match", "failed", action="Reveal email")
             outcomes.append(RevealOutcome(stakeholder_id=sid, status="failed", reason=exc.message))
             if exc.status in STOP_STATUSES:
                 error = exc.message
             continue
 
         if person is None:
-            await calls.record(workspace_id, "apollo", "people/match", "succeeded", credits=0)
+            await calls.record(workspace_id, "apollo", "people/match", "succeeded", credits=0, action="Reveal email")
             await stakeholders.save_revealed(s, None, None)
             outcomes.append(RevealOutcome(stakeholder_id=sid, status="no_match", reason="Apollo had no match"))
             continue
@@ -348,6 +348,8 @@ async def reveal(
             "apollo",
             "people/match",
             "succeeded",
+            action="Reveal email",
+            credits=1,
             key=f"apollo:people/match:{workspace_id}:{s.external_id}",
             lead_id=lead_id,
         )

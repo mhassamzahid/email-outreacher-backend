@@ -8,9 +8,9 @@ from sqlalchemy import case, delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import IcpProfile, Lead, Post, ProviderCall, Stakeholder, Workspace, WorkspaceCompany
+from models import Company, IcpProfile, Lead, Post, ProviderCall, Stakeholder, Workspace, WorkspaceCompany
 from services.apify import Employee, FetchedPost
-from services.apollo import FoundPerson, RevealedPerson
+from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
 from services.leads import Existing, LeadInput
 
 
@@ -247,7 +247,12 @@ class StakeholderRepo:
         return list(await self.session.scalars(query))
 
     async def save_found(
-        self, workspace_id: UUID, company_id: UUID | None, people: list[FoundPerson], icp_id: UUID | None = None
+        self,
+        workspace_id: UUID,
+        company_id: UUID | None,
+        people: list[FoundPerson],
+        icp_id: UUID | None = None,
+        pipeline_company_id: UUID | None = None,
     ) -> int:
         """Add new search hits and refresh known ones; returns how many were new.
 
@@ -269,6 +274,7 @@ class StakeholderRepo:
             statement = insert(Stakeholder).values(
                 workspace_id=workspace_id,
                 lead_intel_business_id=company_id,
+                company_id=pipeline_company_id,
                 lead_intel_icp_id=icp_id,
                 organization_name=p.organization_name,
                 source="apollo",
@@ -290,6 +296,7 @@ class StakeholderRepo:
                     ),
                     "lead_intel_icp_id": func.coalesce(Stakeholder.lead_intel_icp_id, statement.excluded.lead_intel_icp_id),
                     "organization_name": func.coalesce(statement.excluded.organization_name, Stakeholder.organization_name),
+                    "company_id": func.coalesce(statement.excluded.company_id, Stakeholder.company_id),
                     "raw": case((Stakeholder.revealed_at.is_(None), statement.excluded.raw), else_=Stakeholder.raw),
                     "last_name": case(
                         (Stakeholder.revealed_at.is_(None), statement.excluded.last_name), else_=Stakeholder.last_name
@@ -300,7 +307,9 @@ class StakeholderRepo:
         await self.session.commit()
         return sum(p.apollo_id not in known for p in people)
 
-    async def save_employees(self, workspace_id: UUID, company_id: UUID, people: list[Employee]) -> int:
+    async def save_employees(
+        self, workspace_id: UUID, company_id: UUID | None, people: list[Employee], pipeline_company_id: UUID | None = None
+    ) -> int:
         """Add people found on LinkedIn (via Apify) and refresh known ones; returns how many were new.
 
         Unlike an Apollo search these come with full names and a LinkedIn URL, but no email.
@@ -320,6 +329,7 @@ class StakeholderRepo:
             statement = insert(Stakeholder).values(
                 workspace_id=workspace_id,
                 lead_intel_business_id=company_id,
+                company_id=pipeline_company_id,
                 source="apify_linkedin",
                 external_id=p.external_id,
                 first_name=p.first_name,
@@ -338,6 +348,7 @@ class StakeholderRepo:
                     "lead_intel_business_id": func.coalesce(
                         statement.excluded.lead_intel_business_id, Stakeholder.lead_intel_business_id
                     ),
+                    "company_id": func.coalesce(statement.excluded.company_id, Stakeholder.company_id),
                 },
             )
             await self.session.execute(statement)
@@ -384,6 +395,10 @@ class ProviderCallRepo:
         lead_id: UUID | None = None,
         credits: float | None = None,
         cost_usd: float | None = None,
+        action: str | None = None,
+        model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
     ) -> None:
         await self.session.execute(
             insert(ProviderCall)
@@ -396,10 +411,41 @@ class ProviderCallRepo:
                 status=status,
                 credits=credits,
                 cost_usd=cost_usd or 0,
+                action=action,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
             .on_conflict_do_nothing()
         )
         await self.session.commit()
+
+    async def usage(self, workspace_id: UUID, since: datetime, recent: int = 100) -> dict[str, Any]:
+        """Spend since a date: totals per provider, per provider and action, and the latest calls."""
+        where = (ProviderCall.workspace_id == workspace_id, ProviderCall.called_at >= since)
+        sums = (
+            func.count().label("calls"),
+            func.count().filter(ProviderCall.status == "failed").label("failed"),
+            func.coalesce(func.sum(ProviderCall.credits), 0).label("credits"),
+            func.coalesce(func.sum(ProviderCall.cost_usd), 0).label("cost_usd"),
+            func.coalesce(func.sum(ProviderCall.input_tokens), 0).label("input_tokens"),
+            func.coalesce(func.sum(ProviderCall.output_tokens), 0).label("output_tokens"),
+        )
+        action = func.coalesce(ProviderCall.action, ProviderCall.endpoint, "Other").label("action")
+        by_provider = await self.session.execute(
+            select(ProviderCall.provider, *sums).where(*where).group_by(ProviderCall.provider)
+        )
+        by_action = await self.session.execute(
+            select(ProviderCall.provider, action, *sums).where(*where).group_by(ProviderCall.provider, action)
+        )
+        latest = await self.session.scalars(
+            select(ProviderCall).where(*where).order_by(ProviderCall.called_at.desc()).limit(recent)
+        )
+        return {
+            "providers": [dict(r._mapping) for r in by_provider],
+            "actions": [dict(r._mapping) for r in by_action],
+            "recent": list(latest),
+        }
 
 
 async def lead_from_stakeholder(
@@ -490,3 +536,123 @@ class PostRepo:
         if lead_id:
             query = query.where(Post.lead_id == lead_id)
         return list(await self.session.scalars(query.order_by(Post.posted_at.desc().nulls_last(), Post.id)))
+
+
+class CompanyRepo:
+    """The workspace's company pipeline. Reads and writes `outreach.eo_companies` only."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def workspace_exists(self, workspace_id: UUID) -> bool:
+        return (await self.session.get(Workspace, workspace_id)) is not None
+
+    async def get_many(self, workspace_id: UUID, ids: list[UUID]) -> list[Company]:
+        query = select(Company).where(Company.workspace_id == workspace_id, Company.id.in_(ids))
+        return list(await self.session.scalars(query))
+
+    async def get(self, workspace_id: UUID, company_id: UUID) -> Company | None:
+        return await self.session.scalar(select(Company).where(Company.workspace_id == workspace_id, Company.id == company_id))
+
+    async def list(self, workspace_id: UUID, icp_id: UUID | None, status: str | None) -> list[Company]:
+        query = select(Company).where(Company.workspace_id == workspace_id)
+        if icp_id:
+            query = query.where(Company.icp_id == icp_id)
+        if status:
+            query = query.where(Company.status == status)
+        query = query.order_by(Company.score.desc().nulls_last(), Company.created_at.desc(), Company.id)
+        return list(await self.session.scalars(query))
+
+    async def _by_keys(self, workspace_id: UUID) -> tuple[dict[UUID, Company], dict[str, Company], dict[str, Company]]:
+        rows = await self.session.scalars(select(Company).where(Company.workspace_id == workspace_id))
+        by_business: dict[UUID, Company] = {}
+        by_apollo: dict[str, Company] = {}
+        by_domain: dict[str, Company] = {}
+        for row in rows:
+            if row.lead_intel_business_id:
+                by_business[row.lead_intel_business_id] = row
+            if row.apollo_org_id:
+                by_apollo[row.apollo_org_id] = row
+            if row.domain:
+                by_domain[row.domain] = row
+        return by_business, by_apollo, by_domain
+
+    async def add_lead_intel(self, workspace_id: UUID, icp_id: UUID, companies: list[dict[str, Any]]) -> tuple[int, int, int]:
+        """Add Lead Intel companies, qualified straight away (Lead Intel already verified them).
+
+        Returns (added, upgraded, already_had). A company already here from Apollo with the same
+        domain becomes the Lead Intel one rather than a second row.
+        """
+        by_business, _, by_domain = await self._by_keys(workspace_id)
+        added = upgraded = had = 0
+        for c in companies:
+            if c["id"] in by_business:
+                had += 1
+                continue
+            existing = by_domain.get(c["domain"]) if c.get("domain") else None
+            if existing is not None:
+                existing.source = "lead_intel"
+                existing.lead_intel_business_id = c["id"]
+                existing.instagram_url = existing.instagram_url or c.get("instagram_url")
+                if not existing.overridden:
+                    existing.status = "qualified"
+                    existing.status_reason = "In Lead Intel, which already verified it"
+                by_business[c["id"]] = existing
+                upgraded += 1
+                continue
+            row = Company(
+                workspace_id=workspace_id,
+                icp_id=icp_id,
+                source="lead_intel",
+                lead_intel_business_id=c["id"],
+                name=c["name"],
+                domain=c.get("domain"),
+                website_url=c.get("website_url"),
+                instagram_url=c.get("instagram_url"),
+                city=c.get("city"),
+                state=c.get("state"),
+                status="qualified",
+                status_reason="In Lead Intel, which already verified it",
+            )
+            self.session.add(row)
+            if row.domain:
+                by_domain[row.domain] = row
+            by_business[c["id"]] = row
+            added += 1
+        await self.session.commit()
+        return added, upgraded, had
+
+    async def add_apollo(self, workspace_id: UUID, icp_id: UUID, orgs: list[ApolloOrganization]) -> tuple[int, int]:
+        """Add Apollo companies to be researched. Returns (added, duplicates): the same Apollo id,
+        or the same domain as a company already here from either source, is a duplicate."""
+        _, by_apollo, by_domain = await self._by_keys(workspace_id)
+        added = dupes = 0
+        for org in orgs:
+            if org.apollo_id in by_apollo or (org.domain and org.domain in by_domain):
+                dupes += 1
+                continue
+            row = Company(
+                workspace_id=workspace_id,
+                icp_id=icp_id,
+                source="apollo",
+                apollo_org_id=org.apollo_id,
+                name=org.name,
+                domain=org.domain,
+                website_url=org.website_url,
+                linkedin_url=org.linkedin_url,
+                facebook_url=org.facebook_url,
+                twitter_url=org.twitter_url,
+                status="found",
+                raw=org.raw,
+            )
+            self.session.add(row)
+            by_apollo[org.apollo_id] = row
+            if org.domain:
+                by_domain[org.domain] = row
+            added += 1
+        await self.session.commit()
+        return added, dupes
+
+    async def save(self, company: Company) -> None:
+        await self.session.commit()
+        await self.session.refresh(company)

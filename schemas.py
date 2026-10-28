@@ -1,7 +1,7 @@
 """Request and response models. camelCase on the wire to match the frontend."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -250,6 +250,8 @@ class WorkspaceOut(ApiModel):
 class StakeholderOut(ApiModel):
     id: UUID
     company_id: UUID | None = Field(validation_alias="lead_intel_business_id")
+    # The pipeline company (eo_companies) they were found at.
+    pipeline_company_id: UUID | None = Field(default=None, validation_alias="company_id")
     icp_id: UUID | None = Field(validation_alias="lead_intel_icp_id")
     organization_name: str | None
     source: str
@@ -387,3 +389,136 @@ class PostOut(ApiModel):
     media_type: str
     is_repost: bool
     fetched_at: datetime
+
+
+# ---------- Company pipeline ----------
+
+
+class ApolloFindIn(ApiModel):
+    # Default to the ICP's search terms and places when empty.
+    keywords: list[str] = Field(default=[], max_length=30)
+    locations: list[str] = Field(default=[], max_length=30)
+    employee_ranges: list[str] = Field(default=[], max_length=10)
+    page: int = Field(default=1, ge=1, le=500)
+    per_page: int = Field(default=25, ge=1, le=100)
+
+
+class FindCompaniesIn(ApiModel):
+    icp_id: UUID
+    sources: list[Literal["lead_intel", "apollo"]] = Field(default=["lead_intel", "apollo"], min_length=1)
+    # Only these of the ICP's Lead Intel companies; all of them when not given.
+    lead_intel_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=2000)
+    apollo: ApolloFindIn = ApolloFindIn()
+
+
+class SourceFindResult(ApiModel):
+    found: int = 0
+    added: int = 0
+    # Already in the pipeline (same company id or the same website domain).
+    duplicates: int = 0
+    # Apollo companies that turned out to be in Lead Intel too.
+    upgraded: int = 0
+    total_available: int | None = None
+    error: str | None = None
+
+
+class FindCompaniesResult(ApiModel):
+    lead_intel: SourceFindResult | None
+    apollo: SourceFindResult | None
+
+
+class PipelineCompanyOut(ApiModel):
+    id: UUID
+    icp_id: UUID | None
+    source: str
+    lead_intel_business_id: UUID | None
+    apollo_org_id: str | None
+    name: str
+    domain: str | None
+    website_url: str | None
+    linkedin_url: str | None
+    facebook_url: str | None
+    twitter_url: str | None
+    instagram_url: str | None
+    city: str | None
+    state: str | None
+    status: str
+    status_reason: str | None
+    overridden: bool
+    rule_fit: bool | None
+    rule_detail: dict[str, Any] | None
+    score: int | None
+    score_detail: dict[str, Any] | None
+    research: dict[str, Any] | None
+    researched_at: datetime | None
+    created_at: datetime
+
+
+class ResearchIn(ApiModel):
+    company_ids: list[UUID] = Field(min_length=1, max_length=10)
+    # Research again even if done before.
+    force: bool = False
+
+
+class ResearchResult(ApiModel):
+    researched: int
+    skipped: int
+    qualified: int
+    not_fit: int
+    errors: int
+    cost_usd: float
+    notes: list[str]
+
+
+class CompanyStatusIn(ApiModel):
+    status: Literal["qualified", "not_fit"]
+
+
+class PipelineStakeholdersIn(ApiModel):
+    company_ids: list[UUID] = Field(min_length=1, max_length=25)
+    source: Literal["apollo", "linkedin"] = "apollo"
+    titles: list[str] = Field(default=[], max_length=30)
+    seniorities: list[str] = Field(default=[], max_length=11)
+    max_per_company: int = Field(default=10, ge=1, le=50)
+
+
+# ---------- Usage ----------
+
+
+class UsageTotals(ApiModel):
+    calls: int
+    failed: int
+    credits: float
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+
+
+class ProviderUsage(UsageTotals):
+    provider: str
+
+
+class ActionUsage(UsageTotals):
+    provider: str
+    action: str
+
+
+class ProviderCallOut(ApiModel):
+    idempotency_key: str = Field(serialization_alias="id")
+    provider: str
+    endpoint: str | None
+    action: str | None
+    status: str
+    credits: float | None
+    cost_usd: float
+    model: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    called_at: datetime
+
+
+class UsageOut(ApiModel):
+    since: datetime
+    providers: list[ProviderUsage]
+    actions: list[ActionUsage]
+    recent: list[ProviderCallOut]

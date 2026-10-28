@@ -132,6 +132,68 @@ class WorkspaceCompany(Base):
     imported_at: Mapped[datetime] = _created()
 
 
+COMPANY_STATUSES = ("found", "qualified", "not_fit", "error")
+
+
+class Company(Base):
+    """A company in a workspace's pipeline for one ICP: found, researched, then qualified or not.
+
+    Found in Lead Intel (already verified, so qualified straight away) or in Apollo (researched:
+    website and Instagram read, the ICP's rule checked, scored by Claude). Deduplicated per
+    workspace by Lead Intel id, Apollo id, and website domain; a company found in both is the
+    Lead Intel one.
+    """
+
+    __tablename__ = "eo_companies"
+    __table_args__ = (
+        CheckConstraint(_in("source", ("lead_intel", "apollo")), name="source"),
+        CheckConstraint(_in("status", COMPANY_STATUSES), name="status"),
+        CheckConstraint("score is null or score between 0 and 100", name="score"),
+        Index("eo_companies_workspace_domain_key", "workspace_id", "domain", unique=True,
+              postgresql_where=text("domain is not null")),
+        Index("eo_companies_workspace_business_key", "workspace_id", "lead_intel_business_id", unique=True,
+              postgresql_where=text("lead_intel_business_id is not null")),
+        Index("eo_companies_workspace_apollo_key", "workspace_id", "apollo_org_id", unique=True,
+              postgresql_where=text("apollo_org_id is not null")),
+        Index("eo_companies_workspace_icp_status_idx", "workspace_id", "icp_id", "status"),
+    )  # fmt: skip
+
+    id: Mapped[UUID] = _uuid_pk()
+    workspace_id: Mapped[UUID] = _workspace()
+    # The Lead Intel ICP this company was found for (no foreign key: Lead Intel's table).
+    icp_id: Mapped[UUID | None] = mapped_column(default=None)
+    source: Mapped[str] = mapped_column(Text)
+    lead_intel_business_id: Mapped[UUID | None] = mapped_column(default=None)
+    apollo_org_id: Mapped[str | None] = mapped_column(Text, default=None)
+
+    name: Mapped[str] = mapped_column(Text)
+    # Lower-case, no www: the dedupe key across sources.
+    domain: Mapped[str | None] = mapped_column(Text, default=None)
+    website_url: Mapped[str | None] = mapped_column(Text, default=None)
+    linkedin_url: Mapped[str | None] = mapped_column(Text, default=None)
+    facebook_url: Mapped[str | None] = mapped_column(Text, default=None)
+    twitter_url: Mapped[str | None] = mapped_column(Text, default=None)
+    instagram_url: Mapped[str | None] = mapped_column(Text, default=None)
+    city: Mapped[str | None] = mapped_column(Text, default=None)
+    state: Mapped[str | None] = mapped_column(Text, default=None)
+
+    status: Mapped[str] = mapped_column(Text, server_default="found")
+    # Why it qualified or didn't, in one sentence.
+    status_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    # Set by hand to keep or drop a company whatever the research said.
+    overridden: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    rule_fit: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    rule_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    score: Mapped[int | None] = mapped_column(SmallInteger, default=None)
+    score_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    # What was read: website text and pages, socials, Instagram profile, how it was read.
+    research: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    researched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _updated()
+
+
 # ---------- Settings and prompts ----------
 
 
@@ -312,6 +374,8 @@ class Stakeholder(Base):
     id: Mapped[UUID] = _uuid_pk()
     workspace_id: Mapped[UUID] = _workspace()
     lead_intel_business_id: Mapped[UUID | None] = mapped_column(default=None)
+    # The pipeline company they work at, when found through one.
+    company_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_companies.id", ondelete="SET NULL"), default=None, index=True)
     # The Lead Intel ICP whose search found them, when found by ICP rather than by company.
     lead_intel_icp_id: Mapped[UUID | None] = mapped_column(default=None)
     # Their employer as Apollo names it; the only company we know for people found by ICP.
@@ -378,8 +442,12 @@ class ProviderCall(Base):
     workspace_id: Mapped[UUID] = _workspace()
     job_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_jobs.id", ondelete="SET NULL"), default=None)
     lead_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_leads.id", ondelete="SET NULL"), default=None)
-    provider: Mapped[str] = mapped_column(Text)  # apollo | apify | openai | cheapsequencer
+    provider: Mapped[str] = mapped_column(Text)  # apollo | apify | claude | cheapsequencer
     endpoint: Mapped[str | None] = mapped_column(Text, default=None)
+    action: Mapped[str | None] = mapped_column(Text, default=None)  # what the user did: "Find companies", "Research"...
+    model: Mapped[str | None] = mapped_column(Text, default=None)  # Claude model, when provider is claude
+    input_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
     status: Mapped[str] = mapped_column(Text)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 4), server_default="0")
     credits: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), default=None)  # Apollo credits, when relevant

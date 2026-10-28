@@ -57,6 +57,18 @@ class RevealedPerson:
     raw: dict[str, Any]
 
 
+@dataclass
+class ApolloOrganization:
+    apollo_id: str
+    name: str
+    domain: str | None
+    website_url: str | None
+    linkedin_url: str | None
+    facebook_url: str | None
+    twitter_url: str | None
+    raw: dict[str, Any]
+
+
 def _message(response: httpx.Response) -> str:
     if response.status_code == 401:
         return "Apollo rejected the API key. Check APOLLO_API_KEY."
@@ -170,3 +182,40 @@ class ApolloClient:
             match_confidence=p.get("match_confidence"),
             raw=p,
         )
+
+    async def search_organizations(
+        self,
+        *,
+        keywords: list[str],
+        locations: list[str],
+        employee_ranges: list[str],
+        page: int = 1,
+        per_page: int = 25,
+    ) -> tuple[list[ApolloOrganization], int]:
+        """Companies matching an ICP's search terms, places and size. 1 credit per page (up to 100)."""
+        params: list[tuple[str, str]] = [("page", str(page)), ("per_page", str(per_page))]
+        params += [("q_organization_keyword_tags[]", k) for k in keywords]
+        params += [("organization_locations[]", loc) for loc in locations]
+        params += [("organization_num_employees_ranges[]", r) for r in employee_ranges]
+        body = await self._post("/mixed_companies/search", params)
+        found = []
+        # Apollo returns matches in `organizations` and, for companies already in your Apollo CRM,
+        # in `accounts`; both carry the same company fields.
+        for org in [*(body.get("organizations") or []), *(body.get("accounts") or [])]:
+            org_id = org.get("id") or org.get("organization_id")
+            if not org_id:
+                continue
+            found.append(
+                ApolloOrganization(
+                    apollo_id=str(org_id),
+                    name=org.get("name") or "",
+                    domain=(org.get("primary_domain") or None),
+                    website_url=org.get("website_url"),
+                    linkedin_url=org.get("linkedin_url"),
+                    facebook_url=org.get("facebook_url"),
+                    twitter_url=org.get("twitter_url"),
+                    raw=org,
+                )
+            )
+        total = (body.get("pagination") or {}).get("total_entries")
+        return found, int(total) if total is not None else len(found)

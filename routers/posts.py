@@ -89,13 +89,13 @@ async def fetch_posts(
         try:
             fetched, result = await call()
         except ApifyError as exc:
-            await calls.record(workspace_id, "apify", actor, "failed")
+            await calls.record(workspace_id, "apify", actor, "failed", action="Fetch posts")
             error = exc.message
             return
         cost += _cost(result)
         await calls.record(
             workspace_id, "apify", actor, "succeeded",
-            key=f"apify:run:{result.run_id}" if result.run_id else None, cost_usd=result.cost_usd,
+            key=f"apify:run:{result.run_id}" if result.run_id else None, cost_usd=result.cost_usd, action="Fetch posts",
         )  # fmt: skip
         found[source] = _group(fetched, linkedin if source == "linkedin" else instagram)
 

@@ -45,7 +45,7 @@ class FakeStakeholders:
     def _row(self, ws, company_id, p, icp_id=None):
         return SimpleNamespace(
             id=uuid4(), workspace_id=ws, lead_intel_business_id=company_id, lead_intel_icp_id=icp_id,
-            organization_name=p.organization_name, source="apollo", external_id=p.apollo_id,
+            organization_name=p.organization_name, source="apollo", external_id=p.apollo_id, company_id=None,
             first_name=p.first_name, last_name=p.last_name_masked, title=p.title, seniority=None, linkedin_url=None,
             has_email=p.has_email, email=None, email_status=None, revealed_at=None, lead_id=None,
             found_at=datetime.now(UTC),
@@ -60,7 +60,7 @@ class FakeStakeholders:
     async def get_many(self, ws, ids):
         return [r for r in self.rows.values() if r.id in ids]
 
-    async def save_found(self, ws, company_id, people, icp_id=None):
+    async def save_found(self, ws, company_id, people, icp_id=None, pipeline_company_id=None):
         new = 0
         for p in people:
             if not any(r.external_id == p.apollo_id for r in self.rows.values()):
@@ -69,7 +69,7 @@ class FakeStakeholders:
                 new += 1
         return new
 
-    async def save_employees(self, ws, company_id, people):
+    async def save_employees(self, ws, company_id, people, pipeline_company_id=None):
         new = 0
         for p in people:
             if not any(r.external_id == p.external_id for r in self.rows.values()):
@@ -99,9 +99,11 @@ class FakeStakeholders:
 class FakeCalls:
     def __init__(self) -> None:
         self.records: list[tuple] = []
+        self.details: list[dict] = []
 
-    async def record(self, ws, provider, endpoint, status, *, key=None, lead_id=None, credits=None, cost_usd=None):
+    async def record(self, ws, provider, endpoint, status, **detail):
         self.records.append((provider, endpoint, status))
+        self.details.append(detail)
 
 
 @pytest.fixture
