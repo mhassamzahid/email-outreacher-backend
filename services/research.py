@@ -80,6 +80,11 @@ def _score_evidence(company: Company, site: SiteRead | None, ig: InstagramProfil
             "handle": ig.handle, "name": ig.full_name, "bio": ig.bio, "category": ig.category,
             "followers": ig.followers, "private": ig.private,
         },
+        # The company's own latest Instagram posts, for {{company.posts}}.
+        "posts": [] if ig is None else [
+            {"source": p.source, "date": p.posted_at.date().isoformat() if p.posted_at else "", "text": p.text}
+            for p in ig.posts
+        ],
         "apollo": _apollo_facts(company.raw),
     }  # fmt: skip
 

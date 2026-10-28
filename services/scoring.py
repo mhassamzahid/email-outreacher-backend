@@ -15,23 +15,29 @@ from dataclasses import dataclass
 from typing import Any
 
 import anthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from services.claude import error_message
 from services.prompts import DEFAULTS, render, verify_variables
 
 class CompanyScore(BaseModel):
-    score: int
-    summary: str
-    reasons: list[str]
-    concerns: list[str]
+    """Company Verification's verdict on one company."""
+
+    score: int = Field(description="How good a prospect the company is, from 0 to 100, combining ICP fit and product fit.")
+    summary: str = Field(description="One sentence naming the evidence that decided the score.")
+    reasons: list[str] = Field(
+        description='Up to 4 reasons it fits, most important first, each starting "ICP fit:" or "Product fit:" and pointing to the evidence.'
+    )
+    concerns: list[str] = Field(description="Up to 4 concerns or gaps in the evidence, most important first.")
 
 
 class CompanyScoreOrRead(CompanyScore):
     """The score so far, and the one page to read next if the evidence isn't enough yet."""
 
-    next_page: str | None
-    next_reason: str
+    next_page: str | None = Field(
+        description="The one URL from the list of unread pages to read next, or null when the evidence is enough to decide."
+    )
+    next_reason: str = Field(description="What reading next_page should settle. Empty when next_page is null.")
 
 
 @dataclass(frozen=True)

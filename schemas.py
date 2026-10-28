@@ -638,8 +638,12 @@ class GenerateResult(ApiModel):
 
 
 class EmailPointOut(ApiModel):
+    """One of the ranked hooks, best first (rank 1 is the one the email opens with when usable)."""
+
     rank: int
     point: str
+    hook: str
+    source: str
     why: str
     relevance: int
 
@@ -691,6 +695,9 @@ class EmailOut(ApiModel):
     feedback: FeedbackOut | None = None
     # How many rated emails Claude was shown as examples when it wrote this one.
     examples_used: int = 0
+    # The Email Scoring prompt's verdict on this draft (None when it wasn't scored).
+    score: int | None = None
+    score_reasons: list[str] = []
 
 
 class EmailUpdateIn(ApiModel):
@@ -825,3 +832,11 @@ class ProductOut(ProductIn):
     updated_at: datetime
     # The ICPs that chose this product (Lead Intel ICP ids).
     icp_ids: list[UUID] = []
+
+
+class OutputSchemaOut(ApiModel):
+    """One JSON shape a prompt kind answers in, and when it's used."""
+
+    name: str
+    note: str
+    json_schema: dict[str, Any]

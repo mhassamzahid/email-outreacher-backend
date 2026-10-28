@@ -509,7 +509,7 @@ class Post(Base):
 
 
 class Insight(Base):
-    """A ranked point worth mentioning to a lead, drawn from their posts or their company's site."""
+    """A ranked hook for a lead: a detail from their posts, their company's posts or site, or their profile."""
 
     __tablename__ = "eo_insights"
     __table_args__ = (
@@ -523,6 +523,9 @@ class Insight(Base):
     post_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_posts.id", ondelete="CASCADE"), default=None)
     rank: Mapped[int] = mapped_column(SmallInteger)  # 1 is the strongest
     point: Mapped[str] = mapped_column(Text)
+    # The opening sentence written from it, and where it came from ("their LinkedIn post", "company website").
+    hook: Mapped[str] = mapped_column(Text, server_default="")
+    source: Mapped[str] = mapped_column(Text, server_default="")
     why: Mapped[str] = mapped_column(Text, server_default="")
     relevance: Mapped[int] = mapped_column(SmallInteger)
     prompt_version_id: Mapped[UUID | None] = mapped_column(

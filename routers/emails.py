@@ -1,9 +1,11 @@
 """Drafting emails for leads, and reviewing the drafts. Nothing here sends an email.
 
-  generate  for each lead: hook selection on their newest posts and their company's (the ICP's Hook
-            Selection prompt), then the email (its Email Generation prompt). Each prompt version
-            sets how many posts it's given. Replaces the lead's unsent draft. Up to 25 leads at a time.
-  list      drafts, with the ranked points and the post the hook came from.
+  generate  for each lead: hook selection on their posts, their company's posts and website, and their
+            profile (the ICP's Hook Selection prompt) gives ranked hooks; the email is written from the
+            top one (its Email Generation prompt); then the draft is scored against the rated examples
+            (the workspace's Email Scoring prompt). Each prompt version sets how many posts it's given.
+            Replaces the lead's unsent draft. Up to 25 leads at a time.
+  list      drafts, with the ranked hooks, the post the top hook came from, and the score.
   update    edit the subject or body, approve, skip, or put back to draft.
   feedback  rate a draft good or bad, with tags and a note. The ICP's latest ratings are shown to
             Claude as examples when it writes the next emails (how many of each is a workspace setting).
@@ -30,7 +32,7 @@ from dependencies import (
     require_workspace_id,
 )
 from lead_intel import LeadIntelRepo
-from models import Company, Email, Lead, Post
+from models import Company, Email, Lead, Post, Stakeholder
 from schemas import (
     EmailLeadOut,
     EmailOut,
@@ -58,9 +60,46 @@ def _name(lead: Lead) -> str:
     return f"{lead.first_name} {lead.last_name}".strip() or (lead.email or "Unnamed lead")
 
 
-def _company_evidence(company: Company | None, lead: Lead, fields: dict[str, Any] | None) -> dict[str, Any]:
-    """What we know about the lead's company: our research for Apollo companies, Lead Intel's stored
-    fields (read only) for Lead Intel ones, or just what's on the lead."""
+def _text(value: Any) -> str:
+    """A location or similar field that may come as text or as a small object."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return next((v for k in ("linkedinText", "text", "name", "full") if isinstance(v := value.get(k), str) and v), "")
+    return ""
+
+
+def _person(lead: Lead, person: Stakeholder | None, company: Company | None) -> dict[str, Any]:
+    """Everything known about the person for the {{lead.*}} placeholders: the lead, plus the record
+    they were found or added as (Apollo, LinkedIn or by hand)."""
+    raw = (person.raw if person else None) or {}
+    location = _text(raw.get("location")) or ", ".join(
+        x for x in (raw.get("city"), raw.get("state"), raw.get("country")) if isinstance(x, str) and x
+    )
+    jobs = [j for j in raw.get("employment_history") or [] if isinstance(j, dict)]
+    experience = "; ".join(
+        f"{j.get('title') or 'Role'} at {j.get('organization_name') or 'a company'}" + (" (current)" if j.get("current") else "")
+        for j in jobs[:5]
+    )
+    return {
+        "first_name": lead.first_name, "last_name": lead.last_name, "title": lead.title,
+        "seniority": (person.seniority if person else None) or raw.get("seniority") or "",
+        "headline": _text(raw.get("headline")),
+        "location": location,
+        "company": lead.company or (company.name if company else ""),
+        "website": lead.website,
+        "linkedin_url": lead.linkedin_url or (person.linkedin_url if person else None) or "",
+        "instagram_url": lead.instagram_url or "",
+        "experience": experience,
+        "extra": lead.extra,
+    }  # fmt: skip
+
+
+def _company_evidence(
+    company: Company | None, lead: Lead, fields: dict[str, Any] | None, pages: list[dict[str, str]]
+) -> dict[str, Any]:
+    """What we know about the lead's company: our research for Apollo companies (with the website pages
+    it read), Lead Intel's stored fields (read only) for Lead Intel ones, or just what's on the lead."""
     fields = fields or {}
     research = (company.research if company else None) or {}
     site = research.get("website") or {}
@@ -82,6 +121,7 @@ def _company_evidence(company: Company | None, lead: Lead, fields: dict[str, Any
     }  # fmt: skip
     place = (company.city, company.state) if company else ()
     return {
+        "pages": pages,
         "name": company.name if company else lead.company,
         "domain": company.domain if company else lead.domain,
         "location": ", ".join(p for p in place if p),
@@ -119,7 +159,10 @@ async def generate(
     ids = list(dict.fromkeys(body.lead_ids))
     leads = {lead.id: lead for lead in await emails.leads(workspace_id, ids)}
     outcomes: dict[UUID, GenerateOutcome] = {}
-    jobs: list[tuple[Lead, LeadContext, PromptVersionSpec, PromptVersionSpec]] = []
+    jobs: list[tuple[Lead, LeadContext, PromptVersionSpec, PromptVersionSpec, PromptVersionSpec | None]] = []
+    # Email scoring isn't chosen per ICP: every draft is scored with the workspace's default.
+    score_version = await prompts.for_icp(workspace_id, "score", None)
+    score_spec = _spec(score_version) if score_version else None
     icps: dict[UUID, dict[str, Any] | None] = {}
     rated: dict[UUID, list] = {}
     counts = await settings.feedback(workspace_id)
@@ -153,7 +196,11 @@ async def generate(
             found = await lead_intel.get_company(business_id)
             lead_intel_fields[business_id] = found["fields"] if found else None
         fields = lead_intel_fields.get(business_id) if business_id and not has_research else None
-        posts = await emails.posts_for(workspace_id, lead, company, max(hook_spec.posts, email_spec.posts))
+        posts = await emails.posts_for(
+            workspace_id, lead, company, max(hook_spec.posts, email_spec.posts, score_spec.posts if score_spec else 0)
+        )
+        person = await emails.person_for(workspace_id, lead)
+        pages = [{"url": p.url, "text": p.text} for p in await emails.pages_for(company)] if company else []
         if icp_id not in rated:
             # Never the lead's own earlier draft: it's about to be replaced.
             # One extra of each, in case one is this lead's own earlier draft.
@@ -172,24 +219,21 @@ async def generate(
                 )},
                 "product": None if product is None else {k: getattr(product, k) for k in PRODUCT_FIELDS},
             },
-            lead={
-                "first_name": lead.first_name, "last_name": lead.last_name, "title": lead.title,
-                "company": lead.company or (company.name if company else ""), "website": lead.website, "extra": lead.extra,
-            },
+            lead=_person(lead, person, company),
             items=[
                 Item(p.id, "person" if p.lead_id else "company", p.source, p.posted_at, p.text, p.url) for p in posts
             ],
             instruction=body.instruction,
             examples=[Example(f.rating, f.subject, f.body, f.hook, list(f.tags), f.note) for f in picked],
-            company=company_variables(_company_evidence(company, lead, fields)),
+            company=company_variables(_company_evidence(company, lead, fields, pages)),
         )  # fmt: skip
         examples_used[lead.id] = [f.email_id for f in picked]
-        jobs.append((lead, ctx, hook_spec, email_spec))
+        jobs.append((lead, ctx, hook_spec, email_spec, score_spec))
 
-    drafts = await asyncio.gather(*(writer.write(ctx, hook, email) for _, ctx, hook, email in jobs))
+    drafts = await asyncio.gather(*(writer.write(ctx, hook, email, score) for _, ctx, hook, email, score in jobs))
 
     total = 0.0
-    for (lead, ctx, hook_spec, email_spec), draft in zip(jobs, drafts, strict=True):
+    for (lead, ctx, hook_spec, email_spec, score_spec), draft in zip(jobs, drafts, strict=True):
         cost = 0.0
         for call in draft.calls:
             c = cost_usd(call.model, call.input_tokens, call.output_tokens)
@@ -204,28 +248,35 @@ async def generate(
                 await calls.record(workspace_id, "claude", "messages", "failed", lead_id=lead.id, action="Write emails")
             outcomes[lead.id] = GenerateOutcome(lead_id=lead.id, name=_name(lead), status="failed", reason=draft.error)
             continue
-        hook = draft.hook
+        # The ranked hooks, best first. A hook's post number is its place in the posts it was shown,
+        # which are the first ones of ctx.items.
         points = [
             {
-                "post_id": ctx.items[p.item - 1].post_id if p.item and 1 <= p.item <= len(ctx.items) else None,
-                "point": p.point.strip(), "why": p.why.strip(), "relevance": p.relevance,
-                "prompt_version_id": hook_spec.version_id, "model": hook_spec.model,
+                "post_id": ctx.items[h.item - 1].post_id if h.item and 1 <= h.item <= len(ctx.items) else None,
+                "point": h.point.strip(), "hook": h.hook.strip(), "source": h.source.strip(), "why": h.why.strip(),
+                "relevance": h.relevance, "prompt_version_id": hook_spec.version_id, "model": hook_spec.model,
             }
-            for p in sorted(hook.main_points, key=lambda p: -p.relevance) if p.point.strip()
-        ] if hook else []  # fmt: skip
-        flags = sorted(set(hook.flags) if hook else set())
-        if draft.chosen is None:
+            for h in draft.hooks
+        ]  # fmt: skip
+        flags = list(draft.flags)
+        if draft.top is None:
             flags.append("no_hook")
+        if score_spec is not None and draft.score is None:
+            flags.append("not_scored")
         row = await emails.save_draft(
-            workspace_id, lead, points=points[:10],
+            workspace_id, lead, points=points,
             email={
-                "hook_prompt_version_id": hook_spec.version_id if hook else None,
+                "hook_prompt_version_id": hook_spec.version_id if draft.calls and draft.calls[0].step == "hook" else None,
                 "email_prompt_version_id": email_spec.version_id,
                 "chosen_post_id": draft.chosen.post_id if draft.chosen else None,
-                "hook": hook.hook if hook and draft.chosen else "",
-                "relevance": hook.relevance if hook and draft.chosen else 0,
+                "hook": draft.top.hook.strip() if draft.top else "",
+                "relevance": draft.top.relevance if draft.top else 0,
                 "subject": draft.email.subject, "body": draft.email.body, "confidence": draft.email.confidence,
-                "flags": flags, "cost_usd": round(cost, 6), "examples_used": examples_used.get(lead.id, []),
+                "flags": sorted(set(flags)), "cost_usd": round(cost, 6), "examples_used": examples_used.get(lead.id, []),
+            },
+            score=None if draft.score is None else {
+                "score": draft.score.score, "reasons": draft.score.reasons,
+                "prompt_version_id": score_spec.version_id if score_spec else None,
             },
         )  # fmt: skip
         outcomes[lead.id] = GenerateOutcome(lead_id=lead.id, name=_name(lead), status="drafted", email_id=row.id)
@@ -265,6 +316,9 @@ async def _out(emails: EmailRepo, rows: list[tuple[Email, Lead]], feedback: Feed
                 approved_at=e.approved_at,
                 feedback=FeedbackOut.model_validate(ratings[e.id]) if e.id in ratings else None,
                 examples_used=len(e.examples_used or []),
+                # The lead holds the score of its current draft; older, sent or skipped drafts show none.
+                score=lead.score if e.status in ("draft", "edited", "approved") else None,
+                score_reasons=(lead.score_reasons or []) if e.status in ("draft", "edited", "approved") else [],
             )  # fmt: skip
         )
     return out

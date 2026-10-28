@@ -1,12 +1,18 @@
 """Prompt templates: the defaults every workspace starts with, and how {{placeholders}} are filled.
 
-Four kinds, each chosen per ICP (or the workspace's default of that kind):
-  verify  Company Verification: scores how well a researched company fits the ICP.
-  hook    Hook Selection: reads a person's posts and pulls out the points worth mentioning.
-  email   Email Generation: writes the email from the ICP, the person and the hook.
-  score   Email scoring: how safe a drafted email is to send without review (Settings).
+Four kinds. The first three are chosen per ICP (or the workspace's default of that kind); email
+scoring uses the workspace's default:
+  verify  Company Verification: does a researched company fit the ICP, and would it want the product?
+  hook    Hook Selection: reads a person's and their company's posts, website and profile, and ranks
+          the hooks an email could open with.
+  email   Email Generation: writes a personal email to the person from the top hook, the product and
+          the rated examples.
+  score   Email Scoring: how close a draft is to the emails rated good and the sample email, and how
+          far from the ones rated bad.
 
-Placeholders are looked up in a flat map; nothing is evaluated. Unknown ones render empty.
+Placeholders are looked up in a flat map; nothing is evaluated. Unknown ones render empty. Answers
+come back in a fixed shape (structured outputs), so the prompts describe the fields but don't need
+to ask for JSON.
 """
 
 import json
@@ -16,6 +22,7 @@ from typing import Any
 
 KINDS = ("verify", "hook", "email", "score")
 PAGE_CHARS = 4000  # per page, when pages are shown one by one
+POST_CHARS = 700  # per company post in {{company.posts}} for verification
 PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
 DEFAULT_MODEL = "claude-haiku-5-5"
 
@@ -28,37 +35,53 @@ class DefaultPrompt:
     temperature: float
     max_tokens: int
     model: str = DEFAULT_MODEL
+    max_posts: int | None = None  # hook and email prompts: how many posts {{items}} holds (None: 15)
 
 
-VERIFY_SYSTEM = """You decide whether a company is a good prospect for an outreach campaign.
+# ---------------------------------------------------------------------------------------------------
+# Company Verification
+# ---------------------------------------------------------------------------------------------------
 
-You get the campaign's ideal customer profile (ICP) and what we gathered about one company: text
-from its website, its Instagram profile, its socials and Apollo's company data.
+VERIFY_SYSTEM = """You are a careful B2B research analyst. You decide whether one company is worth contacting for an outreach campaign.
 
-Score the fit from 0 to 100:
-- 80 to 100: clearly the kind of business the ICP describes, with direct evidence.
-- 60 to 79: likely a fit; the evidence points that way but leaves some doubt.
-- 30 to 59: unclear or only partly matching.
-- 0 to 29: a different kind of business, or one the ICP rules out.
+You get three groups of information:
+1. The company: what we gathered about it. Its website pages (each page shown separately), its Instagram profile and recent Instagram posts, its other social profiles, and Apollo's company data.
+2. Our ideal customer profile (ICP): the kind of business we target, their pains, and the matching rules our lead database uses for this ICP.
+3. Our product: what we want to sell this company and what it does for customers.
 
-Judge only from the evidence given. Don't assume facts that aren't there. When the evidence is
-thin or missing, score lower and say what was missing. Reasons and concerns are short, specific,
-and point to the evidence (for example "Website offers same-day screen printing")."""
+Judge two things, separately, then combine them into one score:
+- ICP fit: is this the kind of business the ICP describes? Look at what they actually do and sell, who they serve, their size, and where they are. Treat the matching rules as strong signals: a "never these" word that describes the company is close to disqualifying, and a business outside the target places is a poor fit.
+- Product fit: would this company plausibly need and buy our product? Look for signs of the problems the product solves, how they work today, and whether they're the right size and stage to use it.
 
-VERIFY_USER = """The ICP
-Name: {{icp.name}}
-Industry: {{icp.industry}}
-Who they are: {{icp.description}}
-Their pains: {{icp.pains}}
-What we offer: {{icp.offer}}
-Matching rules from Lead Intel:
-{{icp.rules}}
+Scoring, from 0 to 100:
+- 85 to 100: clearly the ICP's kind of business and a clear use for the product, with direct evidence for both.
+- 70 to 84: a good fit on both, with some doubt on one of them.
+- 50 to 69: matches the ICP, but product fit is unclear or weak.
+- 25 to 49: only partly the ICP's kind of business, or little reason to want the product.
+- 0 to 24: a different kind of business, ruled out by the ICP's rules, closed, or a supplier or vendor to the ICP rather than one of them.
+If the product section is empty, judge ICP fit only and say so in the summary.
 
-The company
+Evidence rules:
+- Use only the evidence given. Never assume facts that aren't there, and never invent numbers.
+- When evidence is thin (a site that couldn't be read, no Instagram, an empty Apollo record), score lower and name what's missing as a concern.
+- Prefer what the company says about itself (website, its own posts) over third-party data.
+- Watch for false matches: a company that sells equipment or supplies to the ICP, an agency, a marketplace listing, or a business that only mentions the ICP's words in passing.
+
+What to return:
+- score: the combined 0 to 100 score.
+- summary: one sentence naming the deciding evidence, for example "Austin screen printer doing team orders whose site shows quotes by email, a clear use for faster quoting."
+- reasons: up to 4 short reasons it fits, most important first. Start each with "ICP fit:" or "Product fit:" and point to the evidence, for example "ICP fit: homepage offers custom screen printing and embroidery."
+- concerns: up to 4 short concerns or gaps, most important first, for example "Product fit: no sign they take orders online."
+"""
+
+VERIFY_USER = """Decide whether this company is a good prospect: does it match our ICP, and would it want our product?
+
+## 1. The company
+
 Name: {{company.name}}
 Website: {{company.domain}}
 Location: {{company.location}}
-Socials: {{company.socials}}
+Social profiles: {{company.socials}}
 
 Apollo's company data:
 {{company.apollo}}
@@ -66,109 +89,293 @@ Apollo's company data:
 Instagram profile:
 {{company.instagram}}
 
-Website text:
+Their recent Instagram posts:
+{{company.posts}}
+
+Website pages we read (each page separately):
 {{company.website}}
 
-Score this company's fit with the ICP. Give a one-sentence summary, up to 4 reasons it fits and
-up to 4 concerns, most important first."""
+## 2. Our ICP
 
-HOOK_SYSTEM = """You read a person's recent social posts and pull out what is worth mentioning in a
-cold email to them. You are precise and conservative: a weak or risky hook is worse than no hook."""
+Name: {{icp.name}}
+Industry: {{icp.industry}}
+Places we target: {{icp.places}}
+Who they are: {{icp.description}}
+Their pains: {{icp.pains}}
+How we position our offer to them: {{icp.offer}}
 
-HOOK_USER = """We sell to this ICP: {{icp.name}} ({{icp.titles}} in {{icp.industry}}).
-Their main pains: {{icp.pains}}
-Our offer: {{icp.offer}}
-Hook guidance: {{icp.hookGuidance}}
+The matching rules our lead database uses for this ICP:
+{{icp.rules}}
 
-Person: {{lead.firstName}} {{lead.lastName}}, {{lead.title}} at {{lead.company}}.
+## 3. Our product
 
-Their recent posts and their company's:
-{{items}}
+Product: {{product.name}}
+What it is: {{product.description}}
+What it does for customers: {{product.value}}
+Pricing or offer: {{product.offer}}
 
-1. List the main points these posts make: what they're working on, launching, proud of or struggling with.
-   Only work topics. One short line each, with the post number.
-2. Pick the ONE point that best connects to our offer and their pains. Prefer recent, original posts
-   over reposts.
-3. Never pick grief, illness, layoffs, politics, religion or family. If those are the only points,
-   pick none.
+## How to decide
 
-Return JSON only:
-{
-  "main_points": [{ "item": <post number>, "point": "<one line>" }],
-  "chosen_item": <post number or null>,
-  "focus": "<the point to build the email around, one sentence>",
-  "hook": "<one natural sentence referencing it, max 25 words, no flattery, no quoting more than 5 words>",
-  "relevance": <0-5>,
-  "flags": ["sensitive_topic" | "repost" | "old_content"]
-}
-If nothing is relevant, return chosen_item null, relevance 0, focus "" and hook ""."""
+1. ICP fit: from the company's own words, say what they do and who they serve, then compare that with the ICP and its rules. Check the places and the "never these" words.
+2. Product fit: look for signs they have the problems our product solves, and that they could use it.
+3. Combine both into one score using the scale you were given, and name the evidence behind it."""
 
-EMAIL_SYSTEM = """You write short, plain-text cold emails that sound like one busy person writing to
-another. No hype, no buzzwords, no exclamation marks, no em dashes, no "I hope this email finds you
-well". Use contractions. Never invent facts, numbers or results."""
+# ---------------------------------------------------------------------------------------------------
+# Hook Selection
+# ---------------------------------------------------------------------------------------------------
 
-EMAIL_USER = """Write a cold email to {{lead.firstName}}, {{lead.title}} at {{lead.company}}.
+HOOK_SYSTEM = """You are a sales researcher. You read everything we found about one person and their company, and find the best hooks for a cold email to that person.
 
-ICP context
-- Pains: {{icp.pains}}
-- Offer: {{icp.offer}}
-- Proof we can claim (use it exactly as written, or not at all): {{icp.proof}}
-- Call to action: {{icp.cta}}
-- Tone: {{icp.tone}}
-- Never use these words: {{icp.wordsToAvoid}}
+A hook is one natural sentence the email can open with. It shows we paid attention to something specific this person, or their company, recently said or did, and it leads somewhere relevant to what we sell. A good hook is:
+- Specific: it names the actual thing (the new shop in Round Rock, the post about slow quote turnaround), never a generic compliment.
+- Real: it comes straight from the material given. Never invent, guess or embellish.
+- Recent and their own: prefer the person's own posts, then their company's posts, then the company website, then their profile and role.
+- Connected: it ties to a pain we solve or to what our product does, so the email has a natural next sentence.
+- Safe: never grief, illness, layoffs, politics, religion, family, money trouble or anything personal and sensitive. Skip reposts of other people's content unless they added their own words.
 
-What to focus on (from their posts, may be empty): {{hook.summary}}
-Hook (may be empty): {{hook.text}}
-Source of hook: {{hook.source}}, {{hook.date}}
+How to work:
+1. Read all the material: their own LinkedIn and Instagram posts, their company's posts, the company website and their profile.
+2. List every detail that could open the email: launches, new locations, hires, wins, events, product or service changes, problems they mention, opinions they share.
+3. Rank them, best first, by how specific, recent, personal and connected to our product each one is.
+4. Write each hook as one sentence to the person, in plain words, at most 25 words. No flattery ("impressive", "amazing"), no exclamation marks, no em dashes, and quote at most 5 words from the source.
 
-Example of an email in our voice:
+What to return:
+- hooks: up to 5, ranked best first. For each:
+  - item: the post's number from the lists you were given, or null when the hook comes from the website or their profile.
+  - source: where it comes from, for example "their LinkedIn post", "their Instagram post", "company Instagram post", "company website", "their profile".
+  - point: what they said or did, in one plain line.
+  - hook: the opening sentence, written to the person, for example "Saw your post about opening the second shop in Round Rock."
+  - why: one line on how it connects to their pains or our product.
+  - relevance: 0 to 5. 5 is a recent, personal detail that leads straight to our product; 3 is a solid company detail; 1 is weak; 0 is unusable.
+- flags: any that apply: "sensitive_topic" (you skipped something sensitive), "repost", "old_content" (the best material is over 6 months old), "thin_material" (little to work with).
+
+If nothing is usable, return an empty hooks list and say why in the flags."""
+
+HOOK_USER = """Find the best hooks for a cold email to this person, ranked best first. Every post below has a number; use it as the hook's item.
+
+## The person
+
+Name: {{lead.fullName}}
+Title: {{lead.title}}
+Seniority: {{lead.seniority}}
+Headline: {{lead.headline}}
+Location: {{lead.location}}
+Company: {{lead.company}} ({{lead.website}})
+LinkedIn: {{lead.linkedinUrl}}
+Instagram: {{lead.instagramUrl}}
+Work history: {{lead.experience}}
+
+## Their own posts
+
+LinkedIn:
+{{posts.linkedin}}
+
+Instagram:
+{{posts.instagram}}
+
+## Their company
+
+Name: {{company.name}} ({{company.domain}}), {{company.location}}
+Why it fits our ICP: {{company.summary}}
+
+Instagram profile:
+{{company.instagram}}
+
+The company's posts:
+{{company.posts}}
+
+Website:
+{{company.website}}
+
+## What we sell
+
+Product: {{product.name}}
+What it is: {{product.description}}
+What it does for customers: {{product.value}}
+
+The ICP this person belongs to: {{icp.name}} ({{icp.titles}} in {{icp.industry}})
+Their pains: {{icp.pains}}
+Hook guidance from our team: {{icp.hookGuidance}}
+
+Return up to 5 hooks, best first, following the rules you were given."""
+
+# ---------------------------------------------------------------------------------------------------
+# Email Generation
+# ---------------------------------------------------------------------------------------------------
+
+EMAIL_SYSTEM = """You write cold emails that read like one real person writing to another. Every email goes to one person, not a company: you write to them, about something they did or said, and why it made you think of them.
+
+The email follows this shape, in 3 or 4 short paragraphs:
+1. Open on the hook: something specific this person posted, said or did, in their terms. For example "Saw your post about opening the second shop in Round Rock." Never open with "I hope this finds you well", "My name is", "I came across your profile" or "I'm reaching out because".
+2. Bridge: one sentence connecting that detail to a problem it usually brings, in plain words. For example "Two shops usually means twice the quote requests, and team orders don't wait."
+3. What we do about it: one or two sentences on what our product does for someone in exactly their situation. Concrete, never a feature list. For example "We put every order and job in one list, so you can see what's late without digging through the inbox."
+4. Proof, only if real proof is given: one short sentence using it word for word. If no proof is given, leave it out. Never invent results, customers or numbers.
+5. Ask: one low-friction question that ends the email, built from the call to action. For example "Worth a quick look?" or "Open to a 15-minute call next week?"
+
+How it must read:
+- Human and specific. It should be obvious it was written for this one person. Use their first name once, at the start.
+- Short: 60 to 120 words in the body. Short sentences and paragraphs of one to three sentences.
+- Plain and warm, like a peer. Use contractions (you're, it's, don't).
+- Never use em dashes or en dashes. Use commas, periods or parentheses instead.
+- No exclamation marks, no emojis, no bullet points, no links, no bold or headings.
+- No hype or buzzwords: never "leverage", "synergy", "game-changer", "revolutionize", "streamline", "cutting-edge", "unlock", "elevate", "seamless", "boost", "solution", "innovative", "I wanted to reach out".
+- No flattery: never "impressive", "amazing", "love what you're doing".
+- Mention their post or detail once. Never say how you found it (no "I scraped", "my research", "an AI").
+- No signature or sign-off name: the sending tool adds it. End on the question.
+
+Subject line: 2 to 6 words, lowercase, specific to them and their detail, never clickbait or salesy. For example "round rock shop" or "second shop, quoting".
+
+Facts: use only what's given about the person, their company and our product. If a detail isn't given, don't use it. Proof and numbers are used exactly as written or not at all. If the hooks are empty, open with a specific, true observation about their role or company instead.
+
+Learn from feedback: when you're given emails a reviewer rated good, match their length, tone and structure (never their facts). When you're given emails rated bad, avoid exactly what the reviewer criticised. Treat the sample email as the voice to write in.
+
+What to return:
+- subject: the subject line.
+- body: the email body, starting with the greeting ("Hi Maya,") and ending with the question.
+- confidence: 0 to 100, how strong and well grounded the email is. Lower it when the hook is weak, the material was thin, or you had to stay generic."""
+
+EMAIL_USER = """Write a cold email to {{lead.firstName}}.
+
+## The person you're writing to
+
+Name: {{lead.fullName}}
+Title: {{lead.title}}
+Seniority: {{lead.seniority}}
+Headline: {{lead.headline}}
+Location: {{lead.location}}
+Company: {{lead.company}} ({{lead.website}})
+Work history: {{lead.experience}}
+
+## What to open with
+
+The hooks we found, ranked best first:
+{{hooks}}
+
+Use hook 1 unless another one leads more naturally to what our product does.
+Top hook: {{hook.text}}
+What it's about: {{hook.summary}}
+Where it's from: {{hook.source}} {{hook.date}}
+
+The post it comes from (empty if it came from the website or their profile):
+{{hook.post}}
+
+Their other recent posts, for context only (mention at most one detail, and only if it helps):
+{{posts.linkedin}}
+{{posts.instagram}}
+
+## Their company
+
+{{company.name}} ({{company.domain}}), {{company.location}}
+Why they fit: {{company.summary}}
+
+## What we sell
+
+Product: {{product.name}}
+What it is: {{product.description}}
+What it does for them: {{product.value}}
+Proof (use word for word, or not at all): {{product.proof}}
+Pricing or offer (mention only if it makes the ask easier): {{product.offer}}
+Call to action: {{product.cta}}
+
+## Our angle for this ICP
+
+Who they are: {{icp.name}}
+Their pains: {{icp.pains}}
+How we frame our offer for them: {{icp.offer}}
+More proof we can claim (word for word, or not at all): {{icp.proof}}
+Preferred call to action: {{icp.cta}}
+Tone: {{icp.tone}}
+Never use these words: {{icp.wordsToAvoid}}
+
+## Sample email, in the voice to write in
+
 {{icp.exampleEmail}}
 
-Rules
-- 60 to 110 words, 2 to 4 short paragraphs.
-- If there's a hook, open with it naturally and connect it to one pain in the next sentence. Mention
-  the post only once.
-- If there's no hook, open with a relevant observation about their role or company. Don't invent facts.
-- One clear, low-friction call to action.
-- Subject line: 2 to 6 words, lowercase, no clickbait.
+## Feedback on earlier emails for this ICP
 
-Return JSON only:
-{ "subject": "...", "body": "...", "confidence": <0-100> }"""
+These are about other people. Learn the style, never reuse their details.
 
-SCORE_SYSTEM = """You score how safe and worthwhile a cold email is to send without a person checking
-it first. You are strict: when unsure, score lower so a person reviews it."""
+Emails the reviewer rated good. Match their length, tone and structure:
+{{examples.good}}
 
-SCORE_USER = """ICP: {{icp.name}} ({{icp.titles}} in {{icp.industry}})
-Pains: {{icp.pains}}
-Offer: {{icp.offer}}
-Proof we can claim: {{icp.proof}}
+Emails the reviewer rated bad. Avoid what the reviewer criticised:
+{{examples.bad}}
 
-Lead: {{lead.firstName}} {{lead.lastName}}, {{lead.title}} at {{lead.company}} ({{lead.website}})
+## Now write it
 
-Content found for this lead:
-{{items}}
+Open on the hook, bridge to the problem, say what our product does about it for them, add proof only if it's given, and end with one short question. Follow every rule you were given, especially: no em dashes, 60 to 120 words, no invented facts."""
 
-Hook used (may be empty): {{hook.text}}
+# ---------------------------------------------------------------------------------------------------
+# Email Scoring
+# ---------------------------------------------------------------------------------------------------
 
-Drafted email
+SCORE_SYSTEM = """You review a drafted cold email before a person sees it. You score how close it is to the emails the reviewer liked, and how far it is from the ones they didn't.
+
+You get the draft, the material it was written from, the sample email in our voice, and earlier emails for the same ICP that the reviewer rated good or bad, with their tags and notes.
+
+Score from 0 to 100, adding up:
+- Up to 40: similarity to the emails rated good and to the sample email. Compare length, structure (hook, bridge, what we do, ask), tone, how personal it feels, and the kind of call to action. Similar style, not similar facts.
+- Up to 25: personalization. It opens on a specific, real detail about this person (their post, their company's news), and that detail actually comes from the material given. A generic opener scores 0 here.
+- Up to 20: rules. 60 to 120 words; no em dashes or en dashes; no exclamation marks; contractions used; one clear question at the end; no buzzwords or flattery; none of the words to avoid; no signature.
+- Up to 15: distance from the emails rated bad. Full marks if it repeats none of what the reviewer criticised.
+
+Then subtract:
+- 40 for any fact, number, result or customer not found in the material given, or proof not used word for word.
+- 30 for anything sensitive (grief, illness, politics, religion, family, money trouble).
+- 20 if it repeats a pattern the reviewer criticised in a bad example.
+
+If no emails have been rated yet, judge similarity against the sample email alone and say so. If there's no sample email either, put that weight on the rules and personalization.
+
+Keep the score between 0 and 100. Be strict: when unsure, score lower so a person looks closely.
+
+What to return:
+- score: 0 to 100.
+- reasons: 2 to 5 short reasons, most important first. Name what's similar to or different from the good examples, and quote the exact phrase that breaks a rule or matches a bad example, for example "Opens with 'I hope this finds you well', which the reviewer marked as a bad opener.\""""
+
+SCORE_USER = """Score this draft against the emails the reviewer rated good, the sample email, and the emails rated bad.
+
+## The draft
+
+To: {{lead.fullName}}, {{lead.title}} at {{lead.company}}
 Subject: {{email.subject}}
+
 {{email.body}}
 
-Score from 0 to 100:
-- Fit, up to 40: does the lead match the ICP's titles and industries?
-- Hook, up to 30: is the opening grounded in a real, recent, relevant item? With no hook, at most 10.
-- Email, up to 30: does it read naturally, follow the rules, avoid invented facts and end on one clear call to action?
-Subtract 30 for anything sensitive (grief, illness, politics, religion, family) or any claim the proof does not support.
+## What it was written from
 
-Return JSON only:
-{ "score": <0-100>, "reasons": ["<short reason>", "..."] }
-Give 2 to 4 reasons, most important first."""
+Top hook: {{hook.text}}
+Where it's from: {{hook.source}} {{hook.date}}
+The post it comes from:
+{{hook.post}}
+
+All the hooks we found:
+{{hooks}}
+
+Product: {{product.name}}
+What it does for them: {{product.value}}
+Proof we can claim (must be word for word): {{product.proof}}
+More proof we can claim: {{icp.proof}}
+Words we never use: {{icp.wordsToAvoid}}
+
+## The sample email, in our voice
+
+{{icp.exampleEmail}}
+
+## Emails the reviewer rated good
+
+{{examples.good}}
+
+## Emails the reviewer rated bad
+
+{{examples.bad}}
+
+Score it using the scale and deductions you were given, and give 2 to 5 reasons."""
 
 DEFAULTS: dict[str, DefaultPrompt] = {
     "verify": DefaultPrompt("Default company verification", VERIFY_SYSTEM, VERIFY_USER, 0, 4096),
-    "hook": DefaultPrompt("Default hook selection", HOOK_SYSTEM, HOOK_USER, 0.2, 800),
-    "email": DefaultPrompt("Default email generation", EMAIL_SYSTEM, EMAIL_USER, 0.7, 800),
-    "score": DefaultPrompt("Default email scoring", SCORE_SYSTEM, SCORE_USER, 0, 400),
+    "hook": DefaultPrompt("Default hook selection", HOOK_SYSTEM, HOOK_USER, 0.2, 4096, max_posts=25),
+    "email": DefaultPrompt("Default email generation", EMAIL_SYSTEM, EMAIL_USER, 0.7, 4096, max_posts=10),
+    "score": DefaultPrompt("Default email scoring", SCORE_SYSTEM, SCORE_USER, 0, 4096),
 }
 
 
@@ -217,11 +424,23 @@ def _website(evidence: dict[str, Any]) -> str:
     return evidence.get("website_text") or "(couldn't be read)"
 
 
+def _company_posts(evidence: dict[str, Any]) -> str:
+    """The company's own posts as a numbered list: [{source, date, text}]."""
+    posts = [p for p in evidence.get("posts") or [] if (p.get("text") or "").strip()]
+    if not posts:
+        return "(no posts found)"
+    return "\n".join(
+        f'{i}. [{p.get("source") or "post"}, {p.get("date") or "undated"}] {" ".join(p["text"].split())[:POST_CHARS]}'
+        for i, p in enumerate(posts, 1)
+    )
+
+
 def company_variables(evidence: dict[str, Any]) -> dict[str, str]:
     """The {{company.*}} placeholders, for any prompt kind, from what we know about a company.
 
     evidence: name, domain, location, socials {network: url}, pages [{url, text}] or website_text,
-    instagram (profile dict), apollo (company facts), summary (Company Verification's verdict).
+    instagram (profile dict), posts [{source, date, text}], apollo (company facts), summary (Company
+    Verification's verdict). Email prompts replace {{company.posts}} with their own numbered share.
     """
     ig = evidence.get("instagram")
     return {
@@ -231,6 +450,7 @@ def company_variables(evidence: dict[str, Any]) -> dict[str, str]:
         "company.socials": ", ".join(f"{k}: {v}" for k, v in (evidence.get("socials") or {}).items()) or "(none found)",
         "company.apollo": json.dumps(evidence.get("apollo") or {}, indent=2, ensure_ascii=False),
         "company.instagram": json.dumps(ig, indent=2, ensure_ascii=False) if ig else "(not found)",
+        "company.posts": _company_posts(evidence),
         "company.website": _website(evidence),
         "company.summary": evidence.get("summary") or "",
     }

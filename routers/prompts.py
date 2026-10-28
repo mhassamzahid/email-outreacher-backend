@@ -11,8 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from crud import PromptRepo
 from dependencies import get_prompt_repo, require_workspace_id
+from services.output_schemas import output_schemas
 from schemas import (
     NewVersionIn,
+    OutputSchemaOut,
     PromptCreateIn,
     PromptOut,
     PromptsOut,
@@ -34,6 +36,12 @@ async def _get(prompts: PromptRepo, workspace_id: UUID, prompt_id: UUID):
 async def _workspace(prompts: PromptRepo, workspace_id: UUID) -> None:
     if not await prompts.workspace_exists(workspace_id):
         raise HTTPException(status_code=404, detail="Workspace not found")
+
+
+@router.get("/output-schemas", response_model=dict[str, list[OutputSchemaOut]])
+def list_output_schemas() -> dict[str, list[OutputSchemaOut]]:
+    """The JSON shape each prompt kind answers in, exactly as sent to Claude. Fixed by the app."""
+    return {kind: [OutputSchemaOut(**s) for s in entries] for kind, entries in output_schemas().items()}
 
 
 @router.get("", response_model=PromptsOut)

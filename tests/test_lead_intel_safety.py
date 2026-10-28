@@ -79,15 +79,16 @@ def test_supabase_url_is_converted_for_asyncpg() -> None:
     assert args == {"ssl": "require"}
 
 
-# ---- The one agreed write: adding ICPs to Lead Intel (insert-only, icps table only) ----
+# ---- The agreed writes: adding and editing ICPs in Lead Intel (icps table only, never deleting) ----
 
 APP_FILES = [p for p in ROOT.glob("**/*.py") if not {".venv", "tests", "migrations"} & set(p.parts)]
 
 
-def test_the_only_lead_intel_write_is_inserting_icps() -> None:
+def test_the_only_lead_intel_writes_are_inserting_and_updating_icps() -> None:
     source = (ROOT / "lead_intel_writes.py").read_text(encoding="utf-8")
     assert source.count("insert(") == 1 and "insert(icps)" in source
-    for word in ("update(", "delete(", "UPDATE ", "DELETE ", "ALTER ", "DROP ", "TRUNCATE"):
+    assert source.count("update(") == 1 and "update(icps)" in source
+    for word in ("delete(", "UPDATE ", "DELETE ", "ALTER ", "DROP ", "TRUNCATE"):
         assert word not in source, f"lead_intel_writes.py must never {word.strip('( ')}"
     assert "from lead_intel import icps\n" in source, "it may only touch the icps table"
 
@@ -99,6 +100,6 @@ def test_nothing_else_writes_lead_intel_tables() -> None:
         f"{p.relative_to(ROOT)}: {m.group(0)}"
         for p in APP_FILES
         for m in write.finditer(p.read_text(encoding="utf-8"))
-        if not (p.name == "lead_intel_writes.py" and m.group(0).replace(" ", "") == "insert(icps")
+        if not (p.name == "lead_intel_writes.py" and m.group(0).replace(" ", "") in ("insert(icps", "update(icps"))
     ]
     assert not offenders, offenders

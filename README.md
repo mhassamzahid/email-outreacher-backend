@@ -75,8 +75,8 @@ Check the connection and that Lead Intel still has every column we read:
 | POST | `/api/v1/prompts/{id}/versions` | Save the next version, which becomes the one in use |
 | PATCH | `/api/v1/prompts/{id}` | Rename, or make it the default of its kind |
 | DELETE | `/api/v1/prompts/{id}` | Delete it; 409 for the default or one an ICP uses |
-| POST | `/api/v1/emails/generate` | Hook selection then email generation for up to 25 leads, on each ICP's prompts, with its latest rated emails as examples (counts in settings); replaces unsent drafts. Never sends |
-| GET | `/api/v1/emails` | Drafted emails with their points, hook post and rating (`status`, `leadId`) |
+| POST | `/api/v1/emails/generate` | For up to 25 leads: hook selection (ranked hooks from their posts, their company's posts and website, and their profile), email generation from the top hook with the ICP's rated examples (counts in settings), then email scoring against those examples and the sample email; replaces unsent drafts. Never sends |
+| GET | `/api/v1/emails` | Drafted emails with their ranked hooks, hook post, score and rating (`status`, `leadId`) |
 | PATCH | `/api/v1/emails/{id}` | Edit subject or body, approve, skip, or back to draft (never `sent`) |
 | PUT | `/api/v1/emails/{id}/feedback` | Rate an email `good` or `bad` with tags and a note; replaces an earlier rating |
 | DELETE | `/api/v1/emails/{id}/feedback` | Remove a rating |

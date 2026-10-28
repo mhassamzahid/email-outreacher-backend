@@ -75,7 +75,7 @@ class PromptRepo:
             await self.session.flush()
             version = PromptVersion(
                 prompt_id=prompt.id, version=1, system_prompt=d.system_prompt, user_prompt=d.user_prompt, model=d.model,
-                temperature=d.temperature, max_tokens=d.max_tokens, note="Built-in default",
+                temperature=d.temperature, max_tokens=d.max_tokens, max_posts=d.max_posts, note="Built-in default",
             )  # fmt: skip
             self.session.add(version)
             await self.session.flush()
@@ -926,10 +926,33 @@ class EmailRepo:
         )
         return list(await self.session.scalars(query))
 
+    async def person_for(self, workspace_id: UUID, lead: Lead) -> Stakeholder | None:
+        """The person record (Apollo, LinkedIn or added by hand) this lead was made from, if any."""
+        return await self.session.scalar(
+            select(Stakeholder).where(Stakeholder.workspace_id == workspace_id, Stakeholder.lead_id == lead.id).limit(1)
+        )
+
+    async def pages_for(self, company: Company, limit: int = 6) -> list[CompanyPage]:
+        """The website pages research read for this company, in the order they were read."""
+        query = (
+            select(CompanyPage)
+            .where(CompanyPage.company_id == company.id)
+            .order_by(CompanyPage.fetched_at, CompanyPage.url)
+            .limit(limit)
+        )
+        return list(await self.session.scalars(query))
+
     async def save_draft(
-        self, workspace_id: UUID, lead: Lead, *, points: list[dict[str, Any]], email: dict[str, Any]
+        self,
+        workspace_id: UUID,
+        lead: Lead,
+        *,
+        points: list[dict[str, Any]],
+        email: dict[str, Any],
+        score: dict[str, Any] | None = None,
     ) -> Email:
-        """Replace the lead's points and unsent draft with new ones; the lead becomes 'generated'."""
+        """Replace the lead's points and unsent draft with new ones; the lead becomes 'generated'.
+        With `score` (score, reasons, prompt_version_id), the lead keeps the draft's email score."""
         await self.session.execute(delete(Insight).where(Insight.lead_id == lead.id))
         for rank, point in enumerate(points, 1):
             self.session.add(Insight(workspace_id=workspace_id, lead_id=lead.id, rank=rank, **point))
@@ -937,6 +960,10 @@ class EmailRepo:
         row = Email(workspace_id=workspace_id, lead_id=lead.id, status="draft", **email)
         self.session.add(row)
         lead.status = "generated"
+        lead.score = score["score"] if score else None
+        lead.score_reasons = score["reasons"] if score else None
+        lead.score_prompt_version_id = score["prompt_version_id"] if score else None
+        lead.scored_at = datetime.now(UTC) if score else None
         await self.session.commit()
         await self.session.refresh(row)
         return row
