@@ -198,7 +198,11 @@ class LeadOut(ApiModel):
     extra: dict[str, str]
     origin: str
     status: str
+    # The Email Scoring prompt's score for the lead's current draft, and its reasons.
     score: int | None
+    score_reasons: list[str] | None = None
+    # How many of their own posts are stored (from Fetch posts or Enrich).
+    post_count: int = 0
     created_at: datetime
 
 
@@ -366,6 +370,8 @@ class PostFetchIn(ApiModel):
     lead_ids: list[UUID] = Field(min_length=1, max_length=25)
     max_posts: int = Field(default=5, ge=1, le=20)
     max_age_days: int = Field(default=60, ge=1, le=365)
+    # Which networks to fetch; both unless an ICP turned one off.
+    sources: list[Literal["linkedin", "instagram"]] = Field(default=["linkedin", "instagram"], min_length=1)
 
 
 class LeadPostsResult(ApiModel):
@@ -864,3 +870,15 @@ class ExampleEmailOut(ExampleEmailIn):
 
 class SaveAsExampleIn(ApiModel):
     note: str = Field(default="", max_length=2000)
+
+
+class LeadIdsIn(ApiModel):
+    lead_ids: list[UUID] = Field(min_length=1, max_length=2000)
+
+
+class LeadMoveIn(LeadIdsIn):
+    icp_id: UUID
+
+
+class LeadsChanged(ApiModel):
+    changed: int

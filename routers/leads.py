@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from crud import LeadRepo
 from dependencies import get_lead_intel_repo, get_lead_repo, require_workspace_id
 from lead_intel import LeadIntelRepo
-from schemas import ColumnMapping, ImportResult, LeadIn, LeadOut, Page, RowOutcome
+from schemas import ColumnMapping, ImportResult, LeadIdsIn, LeadIn, LeadMoveIn, LeadOut, LeadsChanged, Page, RowOutcome
 from services.leads import (
     TEMPLATE_ROWS,
     CsvError,
@@ -57,7 +57,31 @@ async def list_leads(
     leads: LeadRepo = Depends(get_lead_repo),
 ) -> Page[LeadOut]:
     rows, total = await leads.list(workspace_id, icp_id, status, q, limit, offset)
-    return Page[LeadOut](items=[LeadOut.model_validate(r) for r in rows], total=total, limit=limit, offset=offset)
+    posts = await leads.post_counts([r.id for r in rows])
+    items = [LeadOut.model_validate(r).model_copy(update={"post_count": posts.get(r.id, 0)}) for r in rows]
+    return Page[LeadOut](items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post("/delete", response_model=LeadsChanged)
+async def delete_leads(
+    body: LeadIdsIn,
+    workspace_id: UUID = Depends(require_workspace_id),
+    leads: LeadRepo = Depends(get_lead_repo),
+) -> LeadsChanged:
+    """Delete leads with their posts, hooks, drafts and ratings. The people they came from stay."""
+    return LeadsChanged(changed=await leads.delete_many(workspace_id, list(dict.fromkeys(body.lead_ids))))
+
+
+@router.post("/move", response_model=LeadsChanged)
+async def move_leads(
+    body: LeadMoveIn,
+    workspace_id: UUID = Depends(require_workspace_id),
+    leads: LeadRepo = Depends(get_lead_repo),
+    lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+) -> LeadsChanged:
+    """Move leads to another ICP. New drafts use that ICP's prompts and messaging."""
+    await _check_targets(workspace_id, body.icp_id, leads, lead_intel)
+    return LeadsChanged(changed=await leads.move_many(workspace_id, list(dict.fromkeys(body.lead_ids)), body.icp_id))
 
 
 @router.post("", response_model=LeadOut, status_code=201)

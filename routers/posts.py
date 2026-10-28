@@ -99,6 +99,12 @@ async def fetch_posts(
         )  # fmt: skip
         found[source] = _group(fetched, linkedin if source == "linkedin" else instagram)
 
+    # Only the networks asked for; the others count as "no URL" in the results.
+    if "linkedin" not in body.sources:
+        linkedin, linkedin_urls = {}, {}
+    if "instagram" not in body.sources:
+        instagram, instagram_urls = {}, {}
+
     if linkedin:
         urls = list(dict.fromkeys(linkedin_urls.values()))
         await run("linkedin", LINKEDIN_POSTS_ACTOR, lambda: apify.linkedin_posts(urls, body.max_posts, since))

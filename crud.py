@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, delete, func, or_, select, tuple_
+from sqlalchemy import case, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -253,6 +253,30 @@ class LeadRepo:
 
     async def get(self, workspace_id: UUID, lead_id: UUID) -> Lead | None:
         return await self.session.scalar(select(Lead).where(Lead.workspace_id == workspace_id, Lead.id == lead_id))
+
+    async def post_counts(self, lead_ids: list[UUID]) -> dict[UUID, int]:
+        """How many posts each of these leads has (their own, not their company's)."""
+        if not lead_ids:
+            return {}
+        rows = await self.session.execute(
+            select(Post.lead_id, func.count()).where(Post.lead_id.in_(lead_ids)).group_by(Post.lead_id)
+        )
+        return {lead_id: n for lead_id, n in rows}
+
+    async def delete_many(self, workspace_id: UUID, lead_ids: list[UUID]) -> int:
+        """Delete these leads with their posts, hooks, drafts and ratings (foreign keys cascade). The
+        people they were made from stay on the People page, unlinked."""
+        result = await self.session.execute(delete(Lead).where(Lead.workspace_id == workspace_id, Lead.id.in_(lead_ids)))
+        await self.session.commit()
+        return result.rowcount
+
+    async def move_many(self, workspace_id: UUID, lead_ids: list[UUID], icp_id: UUID) -> int:
+        """Put these leads in another ICP. Their posts and drafts stay; new drafts use the new ICP."""
+        result = await self.session.execute(
+            update(Lead).where(Lead.workspace_id == workspace_id, Lead.id.in_(lead_ids)).values(lead_intel_icp_id=icp_id)
+        )
+        await self.session.commit()
+        return result.rowcount
 
     async def list(
         self, workspace_id: UUID, icp_id: UUID | None, status: str | None, q: str | None, limit: int, offset: int

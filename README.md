@@ -63,7 +63,7 @@ Check the connection and that Lead Intel still has every column we read:
 | POST | `/api/v1/stakeholders/search-linkedin` | People at companies on LinkedIn via Apify (`harvestapi~linkedin-company-employees`), full names + LinkedIn, no emails; ~$0.004/person |
 | POST | `/api/v1/stakeholders/add-as-leads` | Turn found people with a LinkedIn URL or email into leads; free |
 | GET | `/api/v1/posts` | Fetched posts (`leadId`) |
-| POST | `/api/v1/posts/fetch` | Recent LinkedIn (`harvestapi~linkedin-profile-posts`) and Instagram (`apify~instagram-scraper`) posts for up to 25 leads; Instagram falls back to the company's account from Lead Intel |
+| POST | `/api/v1/posts/fetch` | Recent LinkedIn (`harvestapi~linkedin-profile-posts`) and Instagram (`apify~instagram-scraper`) posts for up to 25 leads; `sources` limits it to `linkedin`, `instagram` or both; Instagram falls back to the company's account from Lead Intel |
 | GET | `/api/v1/pipeline/companies` | The company pipeline (`icpId`, `status`: found, qualified, not_fit, error) |
 | POST | `/api/v1/pipeline/find` | Find companies for an ICP in Lead Intel (qualified straight away) and/or Apollo (`mixed_companies/search`, 1 credit a page); deduplicated by domain, Lead Intel id and Apollo id |
 | POST | `/api/v1/pipeline/research` | Research up to 10 Apollo companies: website (own crawl, Jina fallback), Instagram profile (Apify), the ICP's rule, then a Claude Haiku score |
@@ -91,9 +91,11 @@ Check the connection and that Lead Intel still has every column we read:
 | POST | `/api/v1/examples/from-email/{emailId}` | Save a generated email (with edits) as an example for its lead's ICP |
 | GET | `/api/v1/usage` | Spend over `days` (default 30): Claude tokens and estimated dollars, Apollo credits, Apify dollars; per provider, per action, and the latest 100 calls |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
-| GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |
+| GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`), each with `postCount` |
 | POST | `/api/v1/leads` | Add one lead by hand; 409 if it's a duplicate |
 | POST | `/api/v1/leads/import` | Import a CSV sent as the body (`Content-Type: text/csv`); `icpId`, `dryRun` |
+| POST | `/api/v1/leads/move` | Move `{leadIds}` to `{icpId}`; drafts and posts stay |
+| POST | `/api/v1/leads/delete` | Delete `{leadIds}` with their posts, hooks, drafts and ratings; the people they came from stay |
 
 Lead endpoints need an `X-Workspace-Id` header until sign-in exists. A lead needs an email or a
 LinkedIn URL. Duplicates within a workspace are caught by email, then LinkedIn URL, then company
