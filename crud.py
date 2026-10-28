@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
-    Company, CompanyPage, Email, EmailFeedback, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
+    Company, CompanyPage, Email, EmailFeedback, ExampleEmail, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
     Workspace, WorkspaceCompany,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
@@ -1067,7 +1067,7 @@ class FeedbackRepo:
         return [(icp, rating, n) for icp, rating, n in rows]
 
 
-FEEDBACK_DEFAULTS = {"good_examples": 3, "bad_examples": 3, "improve_examples": 20}
+FEEDBACK_DEFAULTS = {"sample_examples": 3, "good_examples": 3, "bad_examples": 3, "improve_examples": 20}
 RESEARCH_DEFAULTS = {"research_max_pages": 6, "research_max_seconds": 120}
 
 
@@ -1162,4 +1162,56 @@ class ProductRepo:
 
     async def delete(self, product: Product) -> None:
         await self.session.delete(product)
+        await self.session.commit()
+
+
+class ExampleRepo:
+    """The example email library. `outreach.eo_example_emails` only."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def workspace_exists(self, workspace_id: UUID) -> bool:
+        return (await self.session.get(Workspace, workspace_id)) is not None
+
+    async def list(self, workspace_id: UUID) -> list[ExampleEmail]:
+        query = select(ExampleEmail).where(ExampleEmail.workspace_id == workspace_id).order_by(ExampleEmail.created_at.desc())
+        return list(await self.session.scalars(query))
+
+    async def get(self, workspace_id: UUID, example_id: UUID) -> ExampleEmail | None:
+        row = await self.session.get(ExampleEmail, example_id)
+        return row if row and row.workspace_id == workspace_id else None
+
+    async def for_icp(self, workspace_id: UUID, icp_id: UUID, limit: int) -> list[ExampleEmail]:
+        """The newest examples for this ICP: linked to it, or to every ICP."""
+        if limit <= 0:
+            return []
+        query = (
+            select(ExampleEmail)
+            .where(
+                ExampleEmail.workspace_id == workspace_id,
+                or_(ExampleEmail.all_icps, ExampleEmail.icp_ids.any(icp_id)),
+            )
+            .order_by(ExampleEmail.updated_at.desc())
+            .limit(limit)
+        )
+        return list(await self.session.scalars(query))
+
+    async def create(self, workspace_id: UUID, values: dict[str, Any]) -> ExampleEmail:
+        row = ExampleEmail(workspace_id=workspace_id, **values)
+        self.session.add(row)
+        await self.session.commit()
+        await self.session.refresh(row)
+        return row
+
+    async def update(self, row: ExampleEmail, values: dict[str, Any]) -> ExampleEmail:
+        for key, value in values.items():
+            setattr(row, key, value)
+        row.updated_at = datetime.now(UTC)
+        await self.session.commit()
+        await self.session.refresh(row)
+        return row
+
+    async def delete(self, row: ExampleEmail) -> None:
+        await self.session.delete(row)
         await self.session.commit()

@@ -4,10 +4,10 @@
      website and profile go in; a ranked list of hooks comes out, best first. A hook can come from a
      post or from the website or profile. Skipped when there's nothing to read at all.
   2. Email generation (the ICP's Email Generation prompt): the person, the ranked hooks, the post
-     behind the top one, the company, the product, the sample email and the rated examples go in; the
+     behind the top one, the company, the product, the example emails and the rated examples go in; the
      subject and body come out.
   3. Email scoring (the workspace's default Email Scoring prompt): the draft goes in next to the good
-     and bad examples and the sample email; a score from 0 to 100 and reasons come out. A failed score
+     and bad examples and the example emails; a score from 0 to 100 and reasons come out. A failed score
      doesn't lose the draft.
 
 Answers come back in a fixed JSON shape (structured outputs), whatever the prompt asks for. Nothing
@@ -78,7 +78,7 @@ class EmailScore(BaseModel):
     """Email Scoring's answer on one draft."""
 
     score: int = Field(
-        description="0 to 100: how close the draft is to the emails rated good and the sample email, and how far from the ones rated bad."
+        description="0 to 100: how close the draft is to the emails rated good and the example emails, and how far from the ones rated bad."
     )
     reasons: list[str] = Field(description="2 to 5 short reasons, most important first.")
 
@@ -122,6 +122,15 @@ class Example:
 
 
 @dataclass
+class Sample:
+    """An email from the example library (the Example emails page), in the voice we want."""
+
+    subject: str
+    body: str
+    note: str
+
+
+@dataclass
 class LeadContext:
     icp: dict[str, Any]
     profile: dict[str, Any] | None
@@ -133,6 +142,8 @@ class LeadContext:
     examples: list[Example] = field(default_factory=list)
     # The {{company.*}} placeholders for the lead's company (services.prompts.company_variables).
     company: dict[str, str] = field(default_factory=dict)
+    # Example emails for this ICP from the library, newest first.
+    samples: list[Sample] = field(default_factory=list)
 
 
 @dataclass
@@ -198,6 +209,20 @@ def format_rated(examples: list[Example], rating: str) -> str:
     return "\n\n".join(f"<{tag}>\n{_one_example(e)}\n</{tag}>" for e in chosen)
 
 
+def format_samples(samples: list[Sample]) -> str:
+    """The {{examples.samples}} block: example emails in the voice to write in."""
+    if not samples:
+        return "(no example emails yet)"
+    blocks = []
+    for s in samples:
+        lines = [f"Subject: {s.subject}"] if s.subject.strip() else []
+        lines.append(s.body.strip()[:EXAMPLE_CHARS])
+        if s.note.strip():
+            lines.append(f"Why it's a good example: {s.note.strip()}")
+        blocks.append("<example_email>\n" + "\n".join(lines) + "\n</example_email>")
+    return "\n\n".join(blocks)
+
+
 def format_examples(examples: list[Example]) -> str:
     """Rated emails as one block, added after an email prompt that doesn't place {{examples.*}} itself."""
     if not examples:
@@ -243,7 +268,8 @@ def variables(
         "icp.proof": profile.get("proof") or "",
         "icp.cta": profile.get("cta") or "",
         "icp.tone": profile.get("tone") or "",
-        "icp.exampleEmail": profile.get("example_email") or "",
+        # The example library replaced the ICP's single example email; the old name still works.
+        "icp.exampleEmail": format_samples(ctx.samples),
         "icp.wordsToAvoid": profile.get("words_to_avoid") or "",
         "icp.hookGuidance": profile.get("hook_guidance") or "",
         "lead.firstName": first,
@@ -266,6 +292,7 @@ def variables(
         "hook.source": chosen.source if chosen else (top.source if top else ""),
         "hook.url": chosen.url if chosen else "",
         "hook.date": chosen.posted_at.date().isoformat() if chosen and chosen.posted_at else "",
+        "examples.samples": format_samples(ctx.samples),
         "examples.good": format_rated(ctx.examples, "good"),
         "examples.bad": format_rated(ctx.examples, "bad"),
         "email.subject": email.subject if email else "",

@@ -82,10 +82,13 @@ Check the connection and that Lead Intel still has every column we read:
 | DELETE | `/api/v1/emails/{id}/feedback` | Remove a rating |
 | GET | `/api/v1/emails/feedback/stats` | Good and bad counts per ICP |
 | POST | `/api/v1/improve/email-prompt` | Claude (Sonnet 5.5) suggests a revised Email Generation prompt for an ICP from its ratings (at least 3); nothing is saved |
-| GET/PUT | `/api/v1/settings/feedback` | How many rated emails Claude learns from: good and bad examples per email (0-10 each, default 3) and rated emails per prompt suggestion (3-50, default 20) |
+| GET/PUT | `/api/v1/settings/feedback` | How many examples Claude learns from: library examples, good and bad rated emails per email (0-10 each, default 3) and rated emails per prompt suggestion (3-50, default 20) |
 | GET/PUT | `/api/v1/settings/research` | How much of a website research reads while Claude picks each next page: most pages per company (1-15, default 6) and most seconds (30-600, default 120) |
 | GET/POST | `/api/v1/products` | What the workspace sells (name, description, value, proof, offer, call to action, link), with the ICPs selling each |
 | PUT/DELETE | `/api/v1/products/{id}` | Edit a product; delete one no ICP sells (409 otherwise) |
+| GET/POST | `/api/v1/examples` | The example email library: emails in our voice, each linked to ICPs or to all; the newest for a lead's ICP fill {{examples.samples}} |
+| PUT/DELETE | `/api/v1/examples/{id}` | Edit or delete an example |
+| POST | `/api/v1/examples/from-email/{emailId}` | Save a generated email (with edits) as an example for its lead's ICP |
 | GET | `/api/v1/usage` | Spend over `days` (default 30): Claude tokens and estimated dollars, Apollo credits, Apify dollars; per provider, per action, and the latest 100 calls |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |

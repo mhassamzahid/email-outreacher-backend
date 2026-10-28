@@ -10,6 +10,7 @@ from config import get_settings
 from crud import (
     CompanyRepo,
     EmailRepo,
+    ExampleRepo,
     FeedbackRepo,
     IcpProfileRepo,
     LeadRepo,
@@ -107,6 +108,10 @@ def get_settings_repo(session: AsyncSession = Depends(get_session)) -> SettingsR
 
 def get_product_repo(session: AsyncSession = Depends(get_session)) -> ProductRepo:
     return ProductRepo(session)
+
+
+def get_example_repo(session: AsyncSession = Depends(get_session)) -> ExampleRepo:
+    return ExampleRepo(session)
 
 
 def get_prompt_repo(session: AsyncSession = Depends(get_session)) -> PromptRepo:

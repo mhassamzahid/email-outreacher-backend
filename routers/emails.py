@@ -18,9 +18,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from crud import PRODUCT_FIELDS, EmailRepo, FeedbackRepo, IcpProfileRepo, ProductRepo, PromptRepo, ProviderCallRepo, SettingsRepo
+from crud import PRODUCT_FIELDS, EmailRepo, ExampleRepo, FeedbackRepo, IcpProfileRepo, ProductRepo, PromptRepo, ProviderCallRepo, SettingsRepo
 from dependencies import (
     get_email_repo,
+    get_example_repo,
     get_feedback_repo,
     get_icp_profile_repo,
     get_lead_intel_repo,
@@ -49,7 +50,7 @@ from schemas import (
 from services.claude import cost_usd
 from services.prompts import company_variables
 from services.research import _apollo_facts as apollo_facts
-from services.generation import EmailWriter, Example, Item, LeadContext, PromptVersionSpec
+from services.generation import EmailWriter, Example, Item, LeadContext, PromptVersionSpec, Sample
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
@@ -151,6 +152,7 @@ async def generate(
     feedback: FeedbackRepo = Depends(get_feedback_repo),
     settings: SettingsRepo = Depends(get_settings_repo),
     products: ProductRepo = Depends(get_product_repo),
+    library: ExampleRepo = Depends(get_example_repo),
     writer: EmailWriter | None = Depends(get_optional_writer),
 ) -> GenerateResult:
     """Draft an email for each lead. Leads without an ICP are skipped."""
@@ -167,6 +169,7 @@ async def generate(
     rated: dict[UUID, list] = {}
     counts = await settings.feedback(workspace_id)
     want_good, want_bad = counts["good_examples"], counts["bad_examples"]
+    samples: dict[UUID, list[Sample]] = {}
     examples_used: dict[UUID, list[UUID]] = {}
     lead_intel_fields: dict[UUID, dict[str, Any] | None] = {}
 
@@ -207,6 +210,10 @@ async def generate(
             rated[icp_id] = await feedback.examples(
                 workspace_id, icp_id, want_good + 1 if want_good else 0, want_bad + 1 if want_bad else 0
             )
+        if icp_id not in samples:
+            samples[icp_id] = [
+                Sample(s.subject, s.body, s.note) for s in await library.for_icp(workspace_id, icp_id, counts["sample_examples"])
+            ]
         own = {e.id for e, _ in await emails.list(workspace_id, lead_id=lead.id)}
         picked = [f for f in rated[icp_id] if f.email_id not in own]
         picked = [f for f in picked if f.rating == "good"][:want_good] + [f for f in picked if f.rating == "bad"][:want_bad]
@@ -214,7 +221,7 @@ async def generate(
             icp=icp,
             profile=None if profile is None else {
                 **{k: getattr(profile, k) for k in (
-                    "description", "titles", "pains", "offer", "proof", "cta", "tone", "example_email",
+                    "description", "titles", "pains", "offer", "proof", "cta", "tone",
                     "words_to_avoid", "hook_guidance",
                 )},
                 "product": None if product is None else {k: getattr(product, k) for k in PRODUCT_FIELDS},
@@ -226,6 +233,7 @@ async def generate(
             instruction=body.instruction,
             examples=[Example(f.rating, f.subject, f.body, f.hook, list(f.tags), f.note) for f in picked],
             company=company_variables(_company_evidence(company, lead, fields, pages)),
+            samples=samples[icp_id],
         )  # fmt: skip
         examples_used[lead.id] = [f.email_id for f in picked]
         jobs.append((lead, ctx, hook_spec, email_spec, score_spec))

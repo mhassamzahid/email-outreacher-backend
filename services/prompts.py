@@ -7,7 +7,7 @@ scoring uses the workspace's default:
           the hooks an email could open with.
   email   Email Generation: writes a personal email to the person from the top hook, the product and
           the rated examples.
-  score   Email Scoring: how close a draft is to the emails rated good and the sample email, and how
+  score   Email Scoring: how close a draft is to the emails rated good and the example emails, and how
           far from the ones rated bad.
 
 Placeholders are looked up in a flat map; nothing is evaluated. Unknown ones render empty. Answers
@@ -227,7 +227,7 @@ Subject line: 2 to 6 words, lowercase, specific to them and their detail, never 
 
 Facts: use only what's given about the person, their company and our product. If a detail isn't given, don't use it. Proof and numbers are used exactly as written or not at all. If the hooks are empty, open with a specific, true observation about their role or company instead.
 
-Learn from feedback: when you're given emails a reviewer rated good, match their length, tone and structure (never their facts). When you're given emails rated bad, avoid exactly what the reviewer criticised. Treat the sample email as the voice to write in.
+Learn from examples and feedback: treat the example emails as the voice to write in, and match their length, tone and structure (never their facts). Do the same with emails a reviewer rated good. When you're given emails rated bad, avoid exactly what the reviewer criticised.
 
 What to return:
 - subject: the subject line.
@@ -287,9 +287,9 @@ Preferred call to action: {{icp.cta}}
 Tone: {{icp.tone}}
 Never use these words: {{icp.wordsToAvoid}}
 
-## Sample email, in the voice to write in
+## Example emails, in the voice to write in
 
-{{icp.exampleEmail}}
+{{examples.samples}}
 
 ## Feedback on earlier emails for this ICP
 
@@ -311,10 +311,10 @@ Open on the hook, bridge to the problem, say what our product does about it for 
 
 SCORE_SYSTEM = """You review a drafted cold email before a person sees it. You score how close it is to the emails the reviewer liked, and how far it is from the ones they didn't.
 
-You get the draft, the material it was written from, the sample email in our voice, and earlier emails for the same ICP that the reviewer rated good or bad, with their tags and notes.
+You get the draft, the material it was written from, example emails in our voice, and earlier emails for the same ICP that the reviewer rated good or bad, with their tags and notes.
 
 Score from 0 to 100, adding up:
-- Up to 40: similarity to the emails rated good and to the sample email. Compare length, structure (hook, bridge, what we do, ask), tone, how personal it feels, and the kind of call to action. Similar style, not similar facts.
+- Up to 40: similarity to the emails rated good and to the example emails. Compare length, structure (hook, bridge, what we do, ask), tone, how personal it feels, and the kind of call to action. Similar style, not similar facts.
 - Up to 25: personalization. It opens on a specific, real detail about this person (their post, their company's news), and that detail actually comes from the material given. A generic opener scores 0 here.
 - Up to 20: rules. 60 to 120 words; no em dashes or en dashes; no exclamation marks; contractions used; one clear question at the end; no buzzwords or flattery; none of the words to avoid; no signature.
 - Up to 15: distance from the emails rated bad. Full marks if it repeats none of what the reviewer criticised.
@@ -324,7 +324,7 @@ Then subtract:
 - 30 for anything sensitive (grief, illness, politics, religion, family, money trouble).
 - 20 if it repeats a pattern the reviewer criticised in a bad example.
 
-If no emails have been rated yet, judge similarity against the sample email alone and say so. If there's no sample email either, put that weight on the rules and personalization.
+If no emails have been rated yet, judge similarity against the example emails alone and say so. If there are no example emails either, put that weight on the rules and personalization.
 
 Keep the score between 0 and 100. Be strict: when unsure, score lower so a person looks closely.
 
@@ -332,7 +332,7 @@ What to return:
 - score: 0 to 100.
 - reasons: 2 to 5 short reasons, most important first. Name what's similar to or different from the good examples, and quote the exact phrase that breaks a rule or matches a bad example, for example "Opens with 'I hope this finds you well', which the reviewer marked as a bad opener.\""""
 
-SCORE_USER = """Score this draft against the emails the reviewer rated good, the sample email, and the emails rated bad.
+SCORE_USER = """Score this draft against the emails the reviewer rated good, the example emails, and the emails rated bad.
 
 ## The draft
 
@@ -357,9 +357,9 @@ Proof we can claim (must be word for word): {{product.proof}}
 More proof we can claim: {{icp.proof}}
 Words we never use: {{icp.wordsToAvoid}}
 
-## The sample email, in our voice
+## Example emails, in our voice
 
-{{icp.exampleEmail}}
+{{examples.samples}}
 
 ## Emails the reviewer rated good
 

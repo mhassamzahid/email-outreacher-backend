@@ -33,7 +33,6 @@ class IcpProfileIn(ApiModel):
     proof: str = ""
     cta: str = ""
     tone: str = ""
-    example_email: str = ""
     words_to_avoid: str = ""
     hook_guidance: str = ""
     enabled_sources: list[str] = []
@@ -751,8 +750,10 @@ class SuggestOut(ApiModel):
 
 
 class FeedbackSettings(ApiModel):
-    """How many rated emails Claude sees per new email (good and bad), and per prompt suggestion."""
+    """How many examples Claude sees per new email: from the example library, and rated good and bad;
+    and how many rated emails it reads per prompt suggestion."""
 
+    sample_examples: int = Field(ge=0, le=10)
     good_examples: int = Field(ge=0, le=10)
     bad_examples: int = Field(ge=0, le=10)
     improve_examples: int = Field(ge=3, le=50)
@@ -840,3 +841,26 @@ class OutputSchemaOut(ApiModel):
     name: str
     note: str
     json_schema: dict[str, Any]
+
+
+# ---------- Example emails ----------
+
+
+class ExampleEmailIn(ApiModel):
+    subject: str = Field(default="", max_length=300)
+    body: str = Field(min_length=1, max_length=10000)
+    note: str = Field(default="", max_length=2000)
+    all_icps: bool = False
+    icp_ids: list[UUID] = Field(default=[], max_length=100)
+
+
+class ExampleEmailOut(ExampleEmailIn):
+    id: UUID
+    source: str
+    source_email_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SaveAsExampleIn(ApiModel):
+    note: str = Field(default="", max_length=2000)

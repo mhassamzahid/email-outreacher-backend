@@ -212,6 +212,7 @@ class Settings(Base):
         CheckConstraint("bad_examples between 0 and 10", name="bad_examples"),
         CheckConstraint("improve_examples between 3 and 50", name="improve_examples"),
         CheckConstraint("research_max_pages between 1 and 15", name="research_max_pages"),
+        CheckConstraint("sample_examples between 0 and 10", name="sample_examples"),
         CheckConstraint("research_max_seconds between 30 and 600", name="research_max_seconds"),
     )
 
@@ -230,6 +231,8 @@ class Settings(Base):
     good_examples: Mapped[int] = mapped_column(SmallInteger, server_default="3")
     bad_examples: Mapped[int] = mapped_column(SmallInteger, server_default="3")
     improve_examples: Mapped[int] = mapped_column(SmallInteger, server_default="20")
+    # How many example emails from the library (eo_example_emails) each email and score prompt gets.
+    sample_examples: Mapped[int] = mapped_column(SmallInteger, server_default="3")
     # Research: the most pages read per company (homepage included) while Claude chooses the next
     # page, and the most time spent on one company.
     research_max_pages: Mapped[int] = mapped_column(SmallInteger, server_default="6")
@@ -307,7 +310,6 @@ class IcpProfile(Base):
     proof: Mapped[str] = mapped_column(Text, default="", server_default="")
     cta: Mapped[str] = mapped_column(Text, default="", server_default="")
     tone: Mapped[str] = mapped_column(Text, default="", server_default="")
-    example_email: Mapped[str] = mapped_column(Text, default="", server_default="")
     words_to_avoid: Mapped[str] = mapped_column(Text, default="", server_default="")
     hook_guidance: Mapped[str] = mapped_column(Text, default="", server_default="")
     enabled_sources: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
@@ -676,5 +678,31 @@ class Product(Base):
     offer: Mapped[str] = mapped_column(Text, server_default="")  # pricing or the offer, e.g. "first month free"
     cta: Mapped[str] = mapped_column(Text, server_default="")  # the next step we ask for
     url: Mapped[str] = mapped_column(Text, server_default="")
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _updated()
+
+
+class ExampleEmail(Base):
+    """An email in the voice we want, for the email and scoring prompts ({{examples.samples}}).
+
+    Written by hand, or saved from a generated email on the Feedback page. Used for the ICPs it's
+    linked to, or for every ICP.
+    """
+
+    __tablename__ = "eo_example_emails"
+    __table_args__ = (CheckConstraint(_in("source", ("manual", "generated")), name="source"),)
+
+    id: Mapped[UUID] = _uuid_pk()
+    workspace_id: Mapped[UUID] = _workspace()
+    subject: Mapped[str] = mapped_column(Text, server_default="")
+    body: Mapped[str] = mapped_column(Text)
+    # What makes it a good example, in the reviewer's words. Shown to Claude next to it.
+    note: Mapped[str] = mapped_column(Text, server_default="")
+    all_icps: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    # Lead Intel ICP ids it applies to (references only, no foreign key).
+    icp_ids: Mapped[list[UUID]] = mapped_column(ARRAY(Uuid), server_default="{}")
+    source: Mapped[str] = mapped_column(Text, server_default="manual")
+    # The generated email it was saved from, when it came from the Feedback page.
+    source_email_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_emails.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
