@@ -1,4 +1,6 @@
 from collections.abc import AsyncIterator
+
+import anthropic
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException
@@ -7,10 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from config import get_settings
 from crud import (
     CompanyRepo,
+    EmailRepo,
+    FeedbackRepo,
     IcpProfileRepo,
     LeadRepo,
     PostRepo,
     PromptRepo,
+    SettingsRepo,
     ProviderCallRepo,
     StakeholderRepo,
     WorkspaceCompanyRepo,
@@ -21,6 +26,7 @@ from lead_intel import LeadIntelRepo
 from lead_intel_writes import LeadIntelIcpWriter
 from services.apify import ApifyClient
 from services.apollo import ApolloClient
+from services.generation import EmailWriter
 from services.jina import JinaClient
 from services.scoring import CompanyScorer
 from services.website import WebsiteReader
@@ -59,6 +65,43 @@ def get_workspace_repo(session: AsyncSession = Depends(get_session)) -> Workspac
 
 def get_stakeholder_repo(session: AsyncSession = Depends(get_session)) -> StakeholderRepo:
     return StakeholderRepo(session)
+
+
+def get_email_repo(session: AsyncSession = Depends(get_session)) -> EmailRepo:
+    return EmailRepo(session)
+
+
+async def get_optional_writer() -> AsyncIterator[EmailWriter | None]:
+    """The email writer, or None when ANTHROPIC_API_KEY isn't set."""
+    key = get_settings().anthropic_api_key
+    if not key:
+        yield None
+        return
+    writer = EmailWriter(key)
+    try:
+        yield writer
+    finally:
+        await writer.aclose()
+
+
+def get_feedback_repo(session: AsyncSession = Depends(get_session)) -> FeedbackRepo:
+    return FeedbackRepo(session)
+
+
+async def get_optional_anthropic() -> AsyncIterator[anthropic.AsyncAnthropic | None]:
+    key = get_settings().anthropic_api_key
+    if not key:
+        yield None
+        return
+    client = anthropic.AsyncAnthropic(api_key=key, max_retries=4, timeout=300.0)
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+def get_settings_repo(session: AsyncSession = Depends(get_session)) -> SettingsRepo:
+    return SettingsRepo(session)
 
 
 def get_prompt_repo(session: AsyncSession = Depends(get_session)) -> PromptRepo:

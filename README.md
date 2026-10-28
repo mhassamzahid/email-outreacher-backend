@@ -72,6 +72,14 @@ Check the connection and that Lead Intel still has every column we read:
 | POST | `/api/v1/prompts/{id}/versions` | Save the next version, which becomes the one in use |
 | PATCH | `/api/v1/prompts/{id}` | Rename, or make it the default of its kind |
 | DELETE | `/api/v1/prompts/{id}` | Delete it; 409 for the default or one an ICP uses |
+| POST | `/api/v1/emails/generate` | Hook selection then email generation for up to 25 leads, on each ICP's prompts, with its latest rated emails as examples (counts in settings); replaces unsent drafts. Never sends |
+| GET | `/api/v1/emails` | Drafted emails with their points, hook post and rating (`status`, `leadId`) |
+| PATCH | `/api/v1/emails/{id}` | Edit subject or body, approve, skip, or back to draft (never `sent`) |
+| PUT | `/api/v1/emails/{id}/feedback` | Rate an email `good` or `bad` with tags and a note; replaces an earlier rating |
+| DELETE | `/api/v1/emails/{id}/feedback` | Remove a rating |
+| GET | `/api/v1/emails/feedback/stats` | Good and bad counts per ICP |
+| POST | `/api/v1/improve/email-prompt` | Claude (Sonnet 5.5) suggests a revised Email Generation prompt for an ICP from its ratings (at least 3); nothing is saved |
+| GET/PUT | `/api/v1/settings/feedback` | How many rated emails Claude learns from: good and bad examples per email (0-10 each, default 3) and rated emails per prompt suggestion (3-50, default 20) |
 | GET | `/api/v1/usage` | Spend over `days` (default 30): Claude tokens and estimated dollars, Apollo credits, Apify dollars; per provider, per action, and the latest 100 calls |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |

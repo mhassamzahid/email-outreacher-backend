@@ -537,6 +537,8 @@ class PromptVersionIn(ApiModel):
     model: str = Field(min_length=1, max_length=100)
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_tokens: int = Field(default=600, gt=0, le=64000)
+    # Hook and email prompts: how many of the newest posts {{items}} holds. None means 15.
+    max_posts: int | None = Field(default=None, ge=1, le=50)
 
 
 class PromptVersionOut(PromptVersionIn):
@@ -608,3 +610,140 @@ class CompanyPostOut(ApiModel):
 class CompanyContentOut(ApiModel):
     pages: list[CompanyPageOut]
     posts: list[CompanyPostOut]
+
+
+# ---------- Emails: hook selection and email generation ----------
+
+
+class GenerateIn(ApiModel):
+    lead_ids: list[UUID] = Field(min_length=1, max_length=25)
+    # An extra instruction for the email step, e.g. "shorter, mention their new store".
+    instruction: str = Field(default="", max_length=1000)
+
+
+class GenerateOutcome(ApiModel):
+    lead_id: UUID
+    name: str | None
+    status: Literal["drafted", "failed", "skipped"]
+    reason: str | None = None
+    email_id: UUID | None = None
+
+
+class GenerateResult(ApiModel):
+    results: list[GenerateOutcome]
+    drafted: int
+    cost_usd: float
+
+
+class EmailPointOut(ApiModel):
+    rank: int
+    point: str
+    why: str
+    relevance: int
+
+
+class EmailPostOut(ApiModel):
+    source: str
+    url: str
+    posted_at: datetime | None
+    text: str
+    whose: Literal["person", "company"]
+
+
+class EmailLeadOut(ApiModel):
+    id: UUID
+    icp_id: UUID | None = Field(validation_alias="lead_intel_icp_id")
+    first_name: str
+    last_name: str
+    title: str
+    company: str
+    email: str | None
+    linkedin_url: str | None
+
+
+class FeedbackOut(ApiModel):
+    rating: Literal["good", "bad"]
+    tags: list[str]
+    note: str
+    updated_at: datetime
+
+
+class EmailOut(ApiModel):
+    id: UUID
+    lead: EmailLeadOut
+    status: str
+    subject: str
+    body: str
+    original_body: str
+    edited: bool
+    hook: str
+    relevance: int
+    confidence: int
+    flags: list[str]
+    chosen_post: EmailPostOut | None
+    points: list[EmailPointOut]
+    cost_usd: float
+    created_at: datetime
+    updated_at: datetime
+    approved_at: datetime | None
+    feedback: FeedbackOut | None = None
+    # How many rated emails Claude was shown as examples when it wrote this one.
+    examples_used: int = 0
+
+
+class EmailUpdateIn(ApiModel):
+    subject: str | None = Field(default=None, min_length=1, max_length=300)
+    body: str | None = Field(default=None, min_length=1, max_length=10000)
+    # Never "sent": nothing here sends email.
+    status: Literal["draft", "approved", "skipped"] | None = None
+
+
+# ---------- Feedback on generated emails ----------
+
+FeedbackTag = Literal[
+    "strong_hook", "right_tone", "clear_cta", "send_as_is",
+    "too_long", "too_generic", "wrong_hook", "tone_off", "made_up_facts", "weak_cta", "wrong_person",
+]  # fmt: skip
+
+
+class FeedbackIn(ApiModel):
+    rating: Literal["good", "bad"]
+    tags: list[FeedbackTag] = Field(default=[], max_length=11)
+    note: str = Field(default="", max_length=2000)
+
+
+class FeedbackStat(ApiModel):
+    icp_id: UUID | None
+    good: int
+    bad: int
+
+
+class SuggestIn(ApiModel):
+    icp_id: UUID
+
+
+class SuggestOut(ApiModel):
+    prompt_id: UUID
+    prompt_name: str
+    based_on_version: int
+    # Saving the suggestion as a new version changes the prompt for every ICP using it: those that
+    # chose it, and, when it's the default, every ICP left on "Use default".
+    chosen_by_icps: int
+    is_default: bool
+    examples: int
+    summary: str
+    changes: list[str]
+    system_prompt: str
+    user_prompt: str
+    cost_usd: float
+
+
+# ---------- Settings: learning from feedback ----------
+
+
+class FeedbackSettings(ApiModel):
+    """How many rated emails Claude sees per new email (good and bad), and per prompt suggestion."""
+
+    good_examples: int = Field(ge=0, le=10)
+    bad_examples: int = Field(ge=0, le=10)
+    improve_examples: int = Field(ge=3, le=50)

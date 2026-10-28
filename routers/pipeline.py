@@ -48,6 +48,7 @@ from schemas import (
 )
 from services.apify import EMPLOYEES_ACTOR, INSTAGRAM_PROFILE_ACTOR, ApifyClient, ApifyError
 from services.apollo import SENIORITIES, ApolloClient, ApolloError
+from services.claude import cost_usd
 from services.research import research_companies
 from services.scoring import CompanyScorer, PromptSpec
 from services.website import WebsiteReader, normalize_domain
@@ -196,7 +197,7 @@ async def research(
                 workspace_id, "apify", INSTAGRAM_PROFILE_ACTOR, "succeeded", cost_usd=summary.apify_cost_usd, action="Research companies"
             )
         if summary.claude_calls:
-            cost = (summary.input_tokens * settings.claude_input_usd_per_mtok + summary.output_tokens * settings.claude_output_usd_per_mtok) / 1e6
+            cost = cost_usd(summary.claude_model or settings.claude_scoring_model, summary.input_tokens, summary.output_tokens)
             await calls.record(
                 workspace_id, "claude", "messages", "succeeded", cost_usd=round(cost, 4), action="Research companies",
                 model=summary.claude_model, input_tokens=summary.input_tokens, output_tokens=summary.output_tokens,

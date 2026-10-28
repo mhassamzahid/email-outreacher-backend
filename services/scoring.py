@@ -17,6 +17,7 @@ from typing import Any
 import anthropic
 from pydantic import BaseModel
 
+from services.claude import error_message
 from services.prompts import DEFAULTS, render, verify_variables
 
 class CompanyScore(BaseModel):
@@ -79,14 +80,8 @@ class CompanyScorer:
                     output_format=CompanyScore,
                     messages=[{"role": "user", "content": user}],
                 )
-            except anthropic.AuthenticationError:
-                return ScoreResult(None, "", [], [], model, "Claude rejected the API key. Check ANTHROPIC_API_KEY.")
-            except anthropic.RateLimitError:
-                return ScoreResult(None, "", [], [], model, "Claude is rate-limiting us; try again shortly.")
-            except anthropic.APIStatusError as exc:
-                return ScoreResult(None, "", [], [], model, f"Claude answered {exc.status_code}: {exc.message}")
-            except anthropic.APIConnectionError:
-                return ScoreResult(None, "", [], [], model, "Couldn't reach Claude.")
+            except anthropic.APIError as exc:
+                return ScoreResult(None, "", [], [], model, error_message(exc))
 
         tokens = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
         if response.stop_reason == "refusal":

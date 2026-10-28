@@ -9,8 +9,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
-    Company, CompanyPage, IcpProfile, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder, Workspace,
-    WorkspaceCompany,
+    Company, CompanyPage, Email, EmailFeedback, IcpProfile, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
+    Workspace, WorkspaceCompany,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
 from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
@@ -824,3 +824,180 @@ class CompanyRepo:
     async def save(self, company: Company) -> None:
         await self.session.commit()
         await self.session.refresh(company)
+
+
+class EmailRepo:
+    """Drafted emails and the ranked points behind them. `outreach.eo_emails`, `eo_insights`, and the lead's status."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def leads(self, workspace_id: UUID, lead_ids: list[UUID]) -> list[Lead]:
+        return list(await self.session.scalars(select(Lead).where(Lead.workspace_id == workspace_id, Lead.id.in_(lead_ids))))
+
+    async def company_for(self, workspace_id: UUID, lead: Lead) -> Company | None:
+        """The pipeline company the lead was found at, else the one matching their Lead Intel company."""
+        company = await self.session.scalar(
+            select(Company)
+            .join(Stakeholder, Stakeholder.company_id == Company.id)
+            .where(Stakeholder.workspace_id == workspace_id, Stakeholder.lead_id == lead.id)
+            .limit(1)
+        )
+        if company is None and lead.lead_intel_business_id:
+            company = await self.session.scalar(
+                select(Company).where(
+                    Company.workspace_id == workspace_id, Company.lead_intel_business_id == lead.lead_intel_business_id
+                )
+            )
+        return company
+
+    async def posts_for(self, workspace_id: UUID, lead: Lead, company: Company | None, limit: int) -> list[Post]:
+        """The lead's own posts and their company's, newest first."""
+        owners = [Post.lead_id == lead.id] + ([Post.company_id == company.id] if company else [])
+        query = (
+            select(Post)
+            .where(Post.workspace_id == workspace_id, or_(*owners))
+            .order_by(Post.posted_at.desc().nulls_last(), Post.id)
+            .limit(limit)
+        )
+        return list(await self.session.scalars(query))
+
+    async def save_draft(
+        self, workspace_id: UUID, lead: Lead, *, points: list[dict[str, Any]], email: dict[str, Any]
+    ) -> Email:
+        """Replace the lead's points and unsent draft with new ones; the lead becomes 'generated'."""
+        await self.session.execute(delete(Insight).where(Insight.lead_id == lead.id))
+        for rank, point in enumerate(points, 1):
+            self.session.add(Insight(workspace_id=workspace_id, lead_id=lead.id, rank=rank, **point))
+        await self.session.execute(delete(Email).where(Email.lead_id == lead.id, Email.status.in_(("draft", "edited"))))
+        row = Email(workspace_id=workspace_id, lead_id=lead.id, status="draft", **email)
+        self.session.add(row)
+        lead.status = "generated"
+        await self.session.commit()
+        await self.session.refresh(row)
+        return row
+
+    async def list(
+        self, workspace_id: UUID, status: str | None = None, lead_id: UUID | None = None
+    ) -> list[tuple[Email, Lead]]:
+        query = select(Email, Lead).join(Lead, Lead.id == Email.lead_id).where(Email.workspace_id == workspace_id)
+        if status:
+            query = query.where(Email.status == status)
+        if lead_id:
+            query = query.where(Email.lead_id == lead_id)
+        return [(e, lead) for e, lead in await self.session.execute(query.order_by(Email.created_at.desc()))]
+
+    async def get(self, workspace_id: UUID, email_id: UUID) -> tuple[Email, Lead] | None:
+        row = (
+            await self.session.execute(
+                select(Email, Lead).join(Lead, Lead.id == Email.lead_id).where(
+                    Email.workspace_id == workspace_id, Email.id == email_id
+                )
+            )
+        ).first()
+        return (row[0], row[1]) if row else None
+
+    async def insights(self, lead_ids: list[UUID]) -> dict[UUID, list[Insight]]:
+        out: dict[UUID, list[Insight]] = {}
+        if lead_ids:
+            rows = await self.session.scalars(select(Insight).where(Insight.lead_id.in_(lead_ids)).order_by(Insight.rank))
+            for i in rows:
+                out.setdefault(i.lead_id, []).append(i)
+        return out
+
+    async def posts(self, post_ids: list[UUID]) -> dict[UUID, Post]:
+        if not post_ids:
+            return {}
+        return {p.id: p for p in await self.session.scalars(select(Post).where(Post.id.in_(post_ids)))}
+
+    async def commit_refresh(self, *rows: Any) -> None:
+        await self.session.commit()
+        for row in rows:
+            await self.session.refresh(row)
+
+
+class FeedbackRepo:
+    """People's ratings of generated emails. `outreach.eo_email_feedback` only."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def for_emails(self, email_ids: list[UUID]) -> dict[UUID, EmailFeedback]:
+        if not email_ids:
+            return {}
+        rows = await self.session.scalars(select(EmailFeedback).where(EmailFeedback.email_id.in_(email_ids)))
+        return {f.email_id: f for f in rows}
+
+    async def rate(self, email: Email, lead: Lead, rating: str, tags: list[str], note: str) -> EmailFeedback:
+        """Rate an email (again): the text is snapshotted as it is now."""
+        values = {
+            "lead_intel_icp_id": lead.lead_intel_icp_id, "rating": rating, "tags": tags, "note": note,
+            "subject": email.subject, "body": email.edited_body or email.body, "hook": email.hook,
+        }  # fmt: skip
+        row = (
+            await self.session.scalars(
+                insert(EmailFeedback)
+                .values(workspace_id=email.workspace_id, email_id=email.id, **values)
+                .on_conflict_do_update(index_elements=[EmailFeedback.email_id], set_={**values, "updated_at": func.now()})
+                .returning(EmailFeedback)
+            )
+        ).one()
+        await self.session.commit()
+        return row
+
+    async def clear(self, email_id: UUID) -> None:
+        await self.session.execute(delete(EmailFeedback).where(EmailFeedback.email_id == email_id))
+        await self.session.commit()
+
+    async def examples(self, workspace_id: UUID, icp_id: UUID, good: int, bad: int) -> list[EmailFeedback]:
+        """The ICP's most recent good ratings (up to `good`) and bad ones (up to `bad`)."""
+        out: list[EmailFeedback] = []
+        for rating, limit in (("good", good), ("bad", bad)):
+            if limit <= 0:
+                continue
+            out += await self.session.scalars(
+                select(EmailFeedback)
+                .where(
+                    EmailFeedback.workspace_id == workspace_id,
+                    EmailFeedback.lead_intel_icp_id == icp_id,
+                    EmailFeedback.rating == rating,
+                )
+                .order_by(EmailFeedback.updated_at.desc())
+                .limit(limit)
+            )
+        return out
+
+    async def stats(self, workspace_id: UUID) -> list[tuple[UUID | None, str, int]]:
+        rows = await self.session.execute(
+            select(EmailFeedback.lead_intel_icp_id, EmailFeedback.rating, func.count())
+            .where(EmailFeedback.workspace_id == workspace_id)
+            .group_by(EmailFeedback.lead_intel_icp_id, EmailFeedback.rating)
+        )
+        return [(icp, rating, n) for icp, rating, n in rows]
+
+
+FEEDBACK_DEFAULTS = {"good_examples": 3, "bad_examples": 3, "improve_examples": 20}
+
+
+class SettingsRepo:
+    """The workspace's settings row (`outreach.eo_settings`). Only the fields this app uses so far."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def workspace_exists(self, workspace_id: UUID) -> bool:
+        return (await self.session.get(Workspace, workspace_id)) is not None
+
+    async def feedback(self, workspace_id: UUID) -> dict[str, int]:
+        """How many rated emails are used, falling back to the defaults when the row doesn't exist yet."""
+        row = await self.session.get(Settings, workspace_id)
+        return FEEDBACK_DEFAULTS if row is None else {k: getattr(row, k) for k in FEEDBACK_DEFAULTS}
+
+    async def save_feedback(self, workspace_id: UUID, values: dict[str, int]) -> dict[str, int]:
+        await self.session.execute(
+            insert(Settings)
+            .values(workspace_id=workspace_id, **values)
+            .on_conflict_do_update(index_elements=[Settings.workspace_id], set_={**values, "updated_at": func.now()})
+        )
+        await self.session.commit()
+        return await self.feedback(workspace_id)

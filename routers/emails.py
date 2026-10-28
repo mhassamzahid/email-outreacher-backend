@@ -1,0 +1,306 @@
+"""Drafting emails for leads, and reviewing the drafts. Nothing here sends an email.
+
+  generate  for each lead: hook selection on their newest posts and their company's (the ICP's Hook
+            Selection prompt), then the email (its Email Generation prompt). Each prompt version
+            sets how many posts it's given. Replaces the lead's unsent draft. Up to 25 leads at a time.
+  list      drafts, with the ranked points and the post the hook came from.
+  update    edit the subject or body, approve, skip, or put back to draft.
+  feedback  rate a draft good or bad, with tags and a note. The ICP's latest ratings are shown to
+            Claude as examples when it writes the next emails (how many of each is a workspace setting).
+"""
+
+import asyncio
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from crud import EmailRepo, FeedbackRepo, IcpProfileRepo, PromptRepo, ProviderCallRepo, SettingsRepo
+from dependencies import (
+    get_email_repo,
+    get_feedback_repo,
+    get_icp_profile_repo,
+    get_lead_intel_repo,
+    get_optional_writer,
+    get_prompt_repo,
+    get_provider_call_repo,
+    get_settings_repo,
+    require_workspace_id,
+)
+from lead_intel import LeadIntelRepo
+from models import Email, Lead, Post
+from schemas import (
+    EmailLeadOut,
+    EmailOut,
+    EmailPointOut,
+    EmailPostOut,
+    EmailUpdateIn,
+    FeedbackIn,
+    FeedbackOut,
+    FeedbackStat,
+    GenerateIn,
+    GenerateOutcome,
+    GenerateResult,
+)
+from services.claude import cost_usd
+from services.generation import EmailWriter, Example, Item, LeadContext, PromptVersionSpec
+
+router = APIRouter(prefix="/emails", tags=["emails"])
+
+LEAD_STATUS = {"draft": "generated", "edited": "generated", "approved": "approved", "skipped": "skipped"}
+
+
+def _name(lead: Lead) -> str:
+    return f"{lead.first_name} {lead.last_name}".strip() or (lead.email or "Unnamed lead")
+
+
+def _spec(version) -> PromptVersionSpec:
+    return PromptVersionSpec(
+        version.id, version.system_prompt, version.user_prompt, version.model, version.max_tokens, version.max_posts
+    )
+
+
+@router.post("/generate", response_model=GenerateResult)
+async def generate(
+    body: GenerateIn,
+    workspace_id: UUID = Depends(require_workspace_id),
+    emails: EmailRepo = Depends(get_email_repo),
+    lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    profiles: IcpProfileRepo = Depends(get_icp_profile_repo),
+    prompts: PromptRepo = Depends(get_prompt_repo),
+    calls: ProviderCallRepo = Depends(get_provider_call_repo),
+    feedback: FeedbackRepo = Depends(get_feedback_repo),
+    settings: SettingsRepo = Depends(get_settings_repo),
+    writer: EmailWriter | None = Depends(get_optional_writer),
+) -> GenerateResult:
+    """Draft an email for each lead. Leads without an ICP are skipped."""
+    if writer is None:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not set")
+    ids = list(dict.fromkeys(body.lead_ids))
+    leads = {lead.id: lead for lead in await emails.leads(workspace_id, ids)}
+    outcomes: dict[UUID, GenerateOutcome] = {}
+    jobs: list[tuple[Lead, LeadContext, PromptVersionSpec, PromptVersionSpec]] = []
+    icps: dict[UUID, dict[str, Any] | None] = {}
+    rated: dict[UUID, list] = {}
+    counts = await settings.feedback(workspace_id)
+    want_good, want_bad = counts["good_examples"], counts["bad_examples"]
+    examples_used: dict[UUID, list[UUID]] = {}
+
+    # Gather everything from the database first; only the Claude calls run side by side.
+    for lead_id in ids:
+        lead = leads.get(lead_id)
+        if lead is None:
+            outcomes[lead_id] = GenerateOutcome(lead_id=lead_id, name=None, status="skipped", reason="Not in this workspace")
+            continue
+        company = await emails.company_for(workspace_id, lead)
+        icp_id = lead.lead_intel_icp_id or (company.icp_id if company else None)
+        if icp_id and icp_id not in icps:
+            icps[icp_id] = await lead_intel.get_icp(icp_id)
+        icp = icps.get(icp_id) if icp_id else None
+        if icp is None:
+            outcomes[lead_id] = GenerateOutcome(lead_id=lead_id, name=_name(lead), status="skipped", reason="No ICP for this lead")
+            continue
+        profile = (await profiles.get_many(workspace_id, [icp_id])).get(icp_id)
+        hook_version = await prompts.for_icp(workspace_id, "hook", profile.hook_prompt_id if profile else None)
+        email_version = await prompts.for_icp(workspace_id, "email", profile.email_prompt_id if profile else None)
+        hook_spec, email_spec = _spec(hook_version), _spec(email_version)
+        posts = await emails.posts_for(workspace_id, lead, company, max(hook_spec.posts, email_spec.posts))
+        if icp_id not in rated:
+            # Never the lead's own earlier draft: it's about to be replaced.
+            # One extra of each, in case one is this lead's own earlier draft.
+            rated[icp_id] = await feedback.examples(
+                workspace_id, icp_id, want_good + 1 if want_good else 0, want_bad + 1 if want_bad else 0
+            )
+        own = {e.id for e, _ in await emails.list(workspace_id, lead_id=lead.id)}
+        picked = [f for f in rated[icp_id] if f.email_id not in own]
+        picked = [f for f in picked if f.rating == "good"][:want_good] + [f for f in picked if f.rating == "bad"][:want_bad]
+        ctx = LeadContext(
+            icp=icp,
+            profile=None if profile is None else {
+                k: getattr(profile, k) for k in (
+                    "description", "titles", "pains", "offer", "proof", "cta", "tone", "example_email",
+                    "words_to_avoid", "hook_guidance",
+                )
+            },
+            lead={
+                "first_name": lead.first_name, "last_name": lead.last_name, "title": lead.title,
+                "company": lead.company or (company.name if company else ""), "website": lead.website, "extra": lead.extra,
+            },
+            items=[
+                Item(p.id, "person" if p.lead_id else "company", p.source, p.posted_at, p.text, p.url) for p in posts
+            ],
+            instruction=body.instruction,
+            examples=[Example(f.rating, f.subject, f.body, f.hook, list(f.tags), f.note) for f in picked],
+        )  # fmt: skip
+        examples_used[lead.id] = [f.email_id for f in picked]
+        jobs.append((lead, ctx, hook_spec, email_spec))
+
+    drafts = await asyncio.gather(*(writer.write(ctx, hook, email) for _, ctx, hook, email in jobs))
+
+    total = 0.0
+    for (lead, ctx, hook_spec, email_spec), draft in zip(jobs, drafts, strict=True):
+        cost = 0.0
+        for call in draft.calls:
+            c = cost_usd(call.model, call.input_tokens, call.output_tokens)
+            cost += c
+            await calls.record(
+                workspace_id, "claude", "messages", "succeeded", lead_id=lead.id, cost_usd=c, action="Write emails",
+                model=call.model, input_tokens=call.input_tokens, output_tokens=call.output_tokens,
+            )  # fmt: skip
+        total += cost
+        if draft.error or draft.email is None:
+            if not draft.calls:
+                await calls.record(workspace_id, "claude", "messages", "failed", lead_id=lead.id, action="Write emails")
+            outcomes[lead.id] = GenerateOutcome(lead_id=lead.id, name=_name(lead), status="failed", reason=draft.error)
+            continue
+        hook = draft.hook
+        points = [
+            {
+                "post_id": ctx.items[p.item - 1].post_id if p.item and 1 <= p.item <= len(ctx.items) else None,
+                "point": p.point.strip(), "why": p.why.strip(), "relevance": p.relevance,
+                "prompt_version_id": hook_spec.version_id, "model": hook_spec.model,
+            }
+            for p in sorted(hook.main_points, key=lambda p: -p.relevance) if p.point.strip()
+        ] if hook else []  # fmt: skip
+        flags = sorted(set(hook.flags) if hook else set())
+        if draft.chosen is None:
+            flags.append("no_hook")
+        row = await emails.save_draft(
+            workspace_id, lead, points=points[:10],
+            email={
+                "hook_prompt_version_id": hook_spec.version_id if hook else None,
+                "email_prompt_version_id": email_spec.version_id,
+                "chosen_post_id": draft.chosen.post_id if draft.chosen else None,
+                "hook": hook.hook if hook and draft.chosen else "",
+                "relevance": hook.relevance if hook and draft.chosen else 0,
+                "subject": draft.email.subject, "body": draft.email.body, "confidence": draft.email.confidence,
+                "flags": flags, "cost_usd": round(cost, 6), "examples_used": examples_used.get(lead.id, []),
+            },
+        )  # fmt: skip
+        outcomes[lead.id] = GenerateOutcome(lead_id=lead.id, name=_name(lead), status="drafted", email_id=row.id)
+
+    results = [outcomes[i] for i in ids]
+    return GenerateResult(results=results, drafted=sum(r.status == "drafted" for r in results), cost_usd=round(total, 6))
+
+
+async def _out(emails: EmailRepo, rows: list[tuple[Email, Lead]], feedback: FeedbackRepo) -> list[EmailOut]:
+    insights = await emails.insights([lead.id for _, lead in rows])
+    ratings = await feedback.for_emails([e.id for e, _ in rows])
+    posts: dict[UUID, Post] = await emails.posts([e.chosen_post_id for e, _ in rows if e.chosen_post_id])
+    out = []
+    for e, lead in rows:
+        post = posts.get(e.chosen_post_id) if e.chosen_post_id else None
+        out.append(
+            EmailOut(
+                id=e.id,
+                lead=EmailLeadOut.model_validate(lead),
+                status=e.status,
+                subject=e.subject,
+                body=e.edited_body or e.body,
+                original_body=e.body,
+                edited=e.edited_body is not None,
+                hook=e.hook,
+                relevance=e.relevance,
+                confidence=e.confidence,
+                flags=e.flags,
+                chosen_post=None if post is None else EmailPostOut(
+                    source=post.source, url=post.url, posted_at=post.posted_at, text=post.text,
+                    whose="person" if post.lead_id else "company",
+                ),
+                points=[EmailPointOut.model_validate(i) for i in insights.get(lead.id, [])],
+                cost_usd=float(e.cost_usd),
+                created_at=e.created_at,
+                updated_at=e.updated_at,
+                approved_at=e.approved_at,
+                feedback=FeedbackOut.model_validate(ratings[e.id]) if e.id in ratings else None,
+                examples_used=len(e.examples_used or []),
+            )  # fmt: skip
+        )
+    return out
+
+
+@router.get("", response_model=list[EmailOut])
+async def list_emails(
+    status: str | None = Query(default=None, pattern="^(draft|edited|approved|sent|skipped)$"),
+    lead_id: UUID | None = Query(default=None, alias="leadId"),
+    workspace_id: UUID = Depends(require_workspace_id),
+    emails: EmailRepo = Depends(get_email_repo),
+    feedback: FeedbackRepo = Depends(get_feedback_repo),
+) -> list[EmailOut]:
+    """Every generated email, with its rating if it has one."""
+    return await _out(emails, await emails.list(workspace_id, status, lead_id), feedback)
+
+
+@router.get("/feedback/stats", response_model=list[FeedbackStat])
+async def feedback_stats(
+    workspace_id: UUID = Depends(require_workspace_id), feedback: FeedbackRepo = Depends(get_feedback_repo)
+) -> list[FeedbackStat]:
+    """How many emails were rated good and bad, per ICP."""
+    by_icp: dict[UUID | None, dict[str, int]] = {}
+    for icp_id, rating, n in await feedback.stats(workspace_id):
+        by_icp.setdefault(icp_id, {"good": 0, "bad": 0})[rating] = n
+    return [FeedbackStat(icp_id=k, **v) for k, v in by_icp.items()]
+
+
+@router.put("/{email_id}/feedback", response_model=EmailOut)
+async def rate_email(
+    email_id: UUID,
+    body: FeedbackIn,
+    workspace_id: UUID = Depends(require_workspace_id),
+    emails: EmailRepo = Depends(get_email_repo),
+    feedback: FeedbackRepo = Depends(get_feedback_repo),
+) -> EmailOut:
+    """Rate an email good or bad. Rating again replaces the old rating."""
+    found = await emails.get(workspace_id, email_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Email not found")
+    email, lead = found
+    await feedback.rate(email, lead, body.rating, list(dict.fromkeys(body.tags)), body.note.strip())
+    [out] = await _out(emails, [(email, lead)], feedback)
+    return out
+
+
+@router.delete("/{email_id}/feedback", response_model=EmailOut)
+async def clear_rating(
+    email_id: UUID,
+    workspace_id: UUID = Depends(require_workspace_id),
+    emails: EmailRepo = Depends(get_email_repo),
+    feedback: FeedbackRepo = Depends(get_feedback_repo),
+) -> EmailOut:
+    found = await emails.get(workspace_id, email_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Email not found")
+    await feedback.clear(email_id)
+    [out] = await _out(emails, [found], feedback)
+    return out
+
+
+@router.patch("/{email_id}", response_model=EmailOut)
+async def update_email(
+    email_id: UUID,
+    body: EmailUpdateIn,
+    workspace_id: UUID = Depends(require_workspace_id),
+    emails: EmailRepo = Depends(get_email_repo),
+    feedback: FeedbackRepo = Depends(get_feedback_repo),
+) -> EmailOut:
+    """Edit, approve, skip, or put back to draft. Approving doesn't send anything."""
+    found = await emails.get(workspace_id, email_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Email not found")
+    email, lead = found
+    if email.status == "sent":
+        raise HTTPException(status_code=409, detail="This email was already sent")
+    if body.subject is not None:
+        email.subject = body.subject.strip()
+    if body.body is not None and body.body.strip() != (email.edited_body or email.body):
+        email.edited_body = body.body.strip()
+        if email.status == "draft":
+            email.status = "edited"
+    if body.status is not None:
+        email.status = "edited" if body.status == "draft" and email.edited_body is not None else body.status
+        email.approved_at = datetime.now(UTC) if body.status == "approved" else None
+    lead.status = LEAD_STATUS[email.status]
+    await emails.commit_refresh(email, lead)
+    [out] = await _out(emails, [(email, lead)], feedback)
+    return out

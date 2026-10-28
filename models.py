@@ -25,6 +25,7 @@ from sqlalchemy import (
     SmallInteger,
     Text,
     UniqueConstraint,
+    Uuid,
     func,
     text,
 )
@@ -207,6 +208,9 @@ class Settings(Base):
         CheckConstraint("max_post_age_days >= 1", name="max_post_age_days"),
         CheckConstraint("monthly_budget_usd >= 0", name="monthly_budget_usd"),
         CheckConstraint("daily_auto_send_cap >= 0", name="daily_auto_send_cap"),
+        CheckConstraint("good_examples between 0 and 10", name="good_examples"),
+        CheckConstraint("bad_examples between 0 and 10", name="bad_examples"),
+        CheckConstraint("improve_examples between 3 and 50", name="improve_examples"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(ForeignKey("eo_workspaces.id", ondelete="CASCADE"), primary_key=True)
@@ -219,6 +223,11 @@ class Settings(Base):
     score_threshold: Mapped[int] = mapped_column(SmallInteger, server_default="80")
     auto_send: Mapped[bool] = mapped_column(Boolean, server_default="false")
     daily_auto_send_cap: Mapped[int] = mapped_column(Integer, server_default="50")
+    # Learning from feedback: how many rated emails Claude sees as examples when it writes an email
+    # (the ICP's latest good and bad ones), and how many it reads when suggesting a better prompt.
+    good_examples: Mapped[int] = mapped_column(SmallInteger, server_default="3")
+    bad_examples: Mapped[int] = mapped_column(SmallInteger, server_default="3")
+    improve_examples: Mapped[int] = mapped_column(SmallInteger, server_default="20")
     updated_at: Mapped[datetime] = _updated()
 
 
@@ -258,6 +267,7 @@ class PromptVersion(Base):
         UniqueConstraint("prompt_id", "version"),
         CheckConstraint("temperature between 0 and 2", name="temperature"),
         CheckConstraint("max_tokens > 0", name="max_tokens"),
+        CheckConstraint("max_posts is null or max_posts between 1 and 50", name="max_posts"),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -268,6 +278,8 @@ class PromptVersion(Base):
     model: Mapped[str] = mapped_column(Text)
     temperature: Mapped[Decimal] = mapped_column(Numeric(3, 2), server_default="0.7")
     max_tokens: Mapped[int] = mapped_column(Integer, server_default="600")
+    # How many of the newest posts a hook or email prompt is given ({{items}}). Null: the default, 15.
+    max_posts: Mapped[int | None] = mapped_column(SmallInteger, default=None)
     note: Mapped[str] = mapped_column(Text, server_default="")
     created_by: Mapped[UUID | None] = _user_ref()
     created_at: Mapped[datetime] = _created()
@@ -553,6 +565,8 @@ class Email(Base):
     # Where CheapSequencer holds it once queued.
     sequencer_list_id: Mapped[str | None] = mapped_column(Text, default=None)
     sequencer_lead_id: Mapped[str | None] = mapped_column(Text, default=None)
+    # The rated emails shown to Claude as examples when this one was written (see EmailFeedback).
+    examples_used: Mapped[list[UUID]] = mapped_column(ARRAY(Uuid), server_default="{}")
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
 
@@ -596,3 +610,40 @@ class CompanyPage(Base):
     status: Mapped[int | None] = mapped_column(Integer, default=None)
     text: Mapped[str] = mapped_column(Text, server_default="")
     fetched_at: Mapped[datetime] = _created()
+
+
+FEEDBACK_TAGS = (
+    # Good
+    "strong_hook", "right_tone", "clear_cta", "send_as_is",
+    # Bad
+    "too_long", "too_generic", "wrong_hook", "tone_off", "made_up_facts", "weak_cta", "wrong_person",
+)  # fmt: skip
+
+
+class EmailFeedback(Base):
+    """A person's verdict on a generated email: good or bad, why, and the text as it was rated.
+
+    Rated emails for an ICP are shown to Claude as examples when it writes the next ones, and feed
+    the "improve prompt" suggestion. Nothing is trained; the feedback is used in the prompt.
+    """
+
+    __tablename__ = "eo_email_feedback"
+    __table_args__ = (
+        CheckConstraint(_in("rating", ("good", "bad")), name="rating"),
+        Index("eo_email_feedback_icp_idx", "workspace_id", "lead_intel_icp_id", "rating", "updated_at"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    workspace_id: Mapped[UUID] = _workspace()
+    email_id: Mapped[UUID] = mapped_column(ForeignKey("eo_emails.id", ondelete="CASCADE"), unique=True)
+    # The lead's ICP when rated, so examples can be picked per ICP (Lead Intel reference, no foreign key).
+    lead_intel_icp_id: Mapped[UUID | None] = mapped_column(default=None)
+    rating: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    note: Mapped[str] = mapped_column(Text, server_default="")
+    # The email as it was when rated (edits included), so later edits don't change what was judged.
+    subject: Mapped[str] = mapped_column(Text, server_default="")
+    body: Mapped[str] = mapped_column(Text, server_default="")
+    hook: Mapped[str] = mapped_column(Text, server_default="")
+    created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _updated()
