@@ -11,7 +11,7 @@ Actors (all public, no cookies needed):
 
 import asyncio
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -80,6 +80,27 @@ class InstagramProfile:
     verified: bool
     external_url: str | None
     raw: dict[str, Any]
+    # The profile's latest posts, as the profile scraper returns them (usually up to 12).
+    posts: list[FetchedPost] = field(default_factory=list)
+
+
+INSTAGRAM_KINDS = {"Image": "image", "Video": "video", "Sidecar": "carousel"}
+
+
+def _instagram_post(item: dict[str, Any], owner: str | None) -> FetchedPost | None:
+    if not item.get("url") or item.get("error"):
+        return None
+    return FetchedPost(
+        source="instagram",
+        url=item["url"],
+        external_id=str(item["id"]) if item.get("id") else None,
+        posted_at=_date(item.get("timestamp")),
+        text=item.get("caption") or "",
+        media_type=INSTAGRAM_KINDS.get(item.get("type") or "", "image"),
+        is_repost=False,
+        owner_key=owner,
+        raw=item,
+    )
 
 
 def linkedin_slug(url: str | None) -> str | None:
@@ -269,24 +290,11 @@ class ApifyClient:
             "addParentData": False,
         }
         result = await self.run(INSTAGRAM_ACTOR, actor_input, max_posts * len(profile_urls) + 10)
-        kinds = {"Image": "image", "Video": "video", "Sidecar": "carousel"}
         posts = []
         for item in result.items:
-            if not item.get("url") or item.get("error"):
-                continue
-            posts.append(
-                FetchedPost(
-                    source="instagram",
-                    url=item["url"],
-                    external_id=str(item["id"]) if item.get("id") else None,
-                    posted_at=_date(item.get("timestamp")),
-                    text=item.get("caption") or "",
-                    media_type=kinds.get(item.get("type") or "", "image"),
-                    is_repost=False,
-                    owner_key=(item.get("ownerUsername") or instagram_handle(item.get("inputUrl")) or "").lower() or None,
-                    raw=item,
-                )
-            )
+            owner = (item.get("ownerUsername") or instagram_handle(item.get("inputUrl")) or "").lower() or None
+            if post := _instagram_post(item, owner):
+                posts.append(post)
         return posts, result
 
     async def instagram_profiles(self, handles: list[str]) -> tuple[dict[str, InstagramProfile], RunResult]:
@@ -312,5 +320,6 @@ class ApifyClient:
                 verified=bool(item.get("verified")),
                 external_url=item.get("externalUrl"),
                 raw={k: v for k, v in item.items() if k not in ("latestPosts", "latestIgtvVideos", "relatedProfiles")},
+                posts=[p for post in item.get("latestPosts") or [] if (p := _instagram_post(post, handle))],
             )
         return profiles, result

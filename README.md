@@ -47,7 +47,7 @@ Check the connection and that Lead Intel still has every column we read:
 | GET | `/api/v1/icps` | Lead Intel ICPs with company counts and the outreach profile |
 | POST | `/api/v1/icps` | Add an ICP to Lead Intel's `icps` table (Lead Intel's fields; insert-only, recorded as `LEAD_INTEL_ICP_CREATED_BY`) |
 | GET | `/api/v1/icps/{id}` | One ICP |
-| PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP (writes `outreach.eo_icp_profiles` only) |
+| PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP, including its verify, hook and email prompt choices (writes `outreach.eo_icp_profiles` only) |
 | GET | `/api/v1/icps/{id}/companies` | Contactable companies for an ICP (`q`, `limit`, `offset`) |
 | GET | `/api/v1/companies` | Contactable Lead Intel companies (`icpId`, `noIcp`, `inWorkspace`, `q`, `limit`, `offset`); with `X-Workspace-Id` each has `importedAt` |
 | POST | `/api/v1/companies/import` | Pull Lead Intel companies into a workspace: `{companyIds}` or `{icpId}` (writes `eo_workspace_companies` only) |
@@ -64,8 +64,14 @@ Check the connection and that Lead Intel still has every column we read:
 | GET | `/api/v1/pipeline/companies` | The company pipeline (`icpId`, `status`: found, qualified, not_fit, error) |
 | POST | `/api/v1/pipeline/find` | Find companies for an ICP in Lead Intel (qualified straight away) and/or Apollo (`mixed_companies/search`, 1 credit a page); deduplicated by domain, Lead Intel id and Apollo id |
 | POST | `/api/v1/pipeline/research` | Research up to 10 Apollo companies: website (own crawl, Jina fallback), Instagram profile (Apify), the ICP's rule, then a Claude Haiku score |
+| GET | `/api/v1/pipeline/companies/{id}/content` | What research read: each website page's full text (`eo_company_pages`) and the company's own Instagram posts (`eo_posts`) |
 | PATCH | `/api/v1/pipeline/companies/{id}` | Keep (`qualified`) or drop (`not_fit`) by hand; research won't undo it |
 | POST | `/api/v1/pipeline/stakeholders` | People at qualified companies: Apollo by domain, or LinkedIn (Apify) by name |
+| GET | `/api/v1/prompts` | The workspace's prompts and all their versions; creates the built-in defaults (company verification, hook selection, email generation, email scoring) the first time |
+| POST | `/api/v1/prompts` | New prompt with its v1 (`{name, kind, version, note, isDefault}`) |
+| POST | `/api/v1/prompts/{id}/versions` | Save the next version, which becomes the one in use |
+| PATCH | `/api/v1/prompts/{id}` | Rename, or make it the default of its kind |
+| DELETE | `/api/v1/prompts/{id}` | Delete it; 409 for the default or one an ICP uses |
 | GET | `/api/v1/usage` | Spend over `days` (default 30): Claude tokens and estimated dollars, Apollo credits, Apify dollars; per provider, per action, and the latest 100 calls |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`) |

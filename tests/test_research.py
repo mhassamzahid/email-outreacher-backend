@@ -9,9 +9,10 @@ import anthropic
 import httpx
 
 from models import Company
-from services.apify import InstagramProfile, RunResult
+from services.apify import FetchedPost, InstagramProfile, RunResult
 from services.research import research_companies
-from services.scoring import CompanyScore, CompanyScorer, build_prompt
+from services.prompts import DEFAULTS, render, verify_variables
+from services.scoring import CompanyScore, CompanyScorer, PromptSpec
 from services.website import SiteRead
 
 ICP = {
@@ -46,7 +47,13 @@ class FakeApify:
 
     async def instagram_profiles(self, handles):
         self.asked.append(handles)
-        profiles = {h: InstagramProfile(h, h.title(), "Custom tees", "Printing service", 1200, False, False, None, {}) for h in handles}
+        def post(h):
+            return FetchedPost("instagram", f"https://www.instagram.com/p/{h}1/", "1", None, "New colours", "image", False, h, {})
+
+        profiles = {
+            h: InstagramProfile(h, h.title(), "Custom tees", "Printing service", 1200, False, False, None, {"id": h}, [post(h)])
+            for h in handles
+        }
         return profiles, RunResult([], 0.0026 * len(handles), "run-ig")
 
 
@@ -58,7 +65,7 @@ class FakeScorer:
         self.calls = 0
         self.value, self.error = score, error
 
-    async def score(self, icp, profile, evidence):
+    async def score(self, icp, profile, evidence, prompt=None):
         from services.scoring import ScoreResult
 
         self.calls += 1
@@ -74,7 +81,8 @@ def company(name, domain):
 
 def site(domain, text, socials=None):
     return SiteRead(domain=domain, outcome="ok", via="own_crawl", resolved_url=f"https://{domain}/", text=text,
-                    title=domain, socials=socials or {})  # fmt: skip
+                    title=domain, socials=socials or {},
+                    pages=[{"url": f"https://{domain}/", "role": "homepage", "status": 200, "text": text}])  # fmt: skip
 
 
 @sync
@@ -104,6 +112,11 @@ async def test_research_reads_checks_scores_and_decides() -> None:
     assert scorer.calls == 1 and apify.asked == [["inkco"]]
     assert summary.apify_cost_usd == 0.0026
     assert (summary.claude_calls, summary.input_tokens, summary.output_tokens) == (1, 900, 120)
+    # What was read comes back to be stored: page texts (not kept in the company's research JSON) and posts.
+    via, pages = summary.pages[good.id]
+    assert via == "own_crawl" and pages[0]["text"] == "Same day screen printing" and "text" not in good.research["website"]["pages"][0]
+    assert [p.text for p in summary.posts[good.id]] == ["New colours"] and good.research["instagram"]["raw"] == {"id": "inkco"}
+    assert (good.score_detail["input_tokens"], good.score_detail["prompt_version_id"]) == (900, None)
     assert summary.claude_model == "claude-haiku-5-5"
 
 
@@ -128,10 +141,30 @@ async def test_without_claude_the_rule_decides_and_scoring_errors_are_errors() -
     assert b.status == "error" and "rate-limiting" in b.status_reason
 
 
-def test_prompt_carries_icp_and_evidence_verbatim() -> None:
-    prompt = build_prompt(ICP, {"description": "Local print shops", "pains": "Slow quotes", "offer": "Faster quoting"},
-                          {"name": "Ink Co", "website": {"text": "Same day screen printing"}})  # fmt: skip
-    assert "<icp>" in prompt and "Faster quoting" in prompt and "Same day screen printing" in prompt
+def test_default_prompt_carries_icp_and_evidence_verbatim() -> None:
+    variables = verify_variables(ICP, {"description": "Local print shops", "pains": "Slow quotes", "offer": "Faster quoting"},
+                                 {"name": "Ink Co", "website_text": "Same day screen printing", "instagram": None})  # fmt: skip
+    prompt = render(DEFAULTS["verify"].user_prompt, variables)
+    assert "Faster quoting" in prompt and "Same day screen printing" in prompt and "Ink Co" in prompt
+    assert "{{" not in prompt and "Instagram profile:\n(not found)" in prompt
+    # Unknown placeholders render empty rather than leaking into the prompt.
+    assert render("a {{nope}} b {{ icp.name }}", variables) == f"a  b {ICP['name']}"
+
+
+@sync
+async def test_scorer_uses_the_given_prompt_and_its_model() -> None:
+    seen = {}
+
+    async def parse(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stop_reason="end_turn", usage=USAGE, parsed_output=CompanyScore(score=70, summary="ok", reasons=[], concerns=[]))
+
+    fake = SimpleNamespace(messages=SimpleNamespace(parse=parse), close=lambda: asyncio.sleep(0))
+    spec = PromptSpec("Be strict.", "Score {{company.name}} for {{icp.name}}.", "claude-sonnet-5-5", 900)
+    result = await CompanyScorer("key", "claude-haiku-5-5", client=fake).score(ICP, None, {"name": "Ink Co"}, spec)
+    assert (seen["model"], seen["system"], seen["max_tokens"]) == ("claude-sonnet-5-5", "Be strict.", 900)
+    assert seen["messages"][0]["content"] == f"Score Ink Co for {ICP['name']}."
+    assert result.model == "claude-sonnet-5-5"
 
 
 @sync

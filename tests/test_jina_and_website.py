@@ -134,6 +134,7 @@ async def test_reads_home_contact_about_politely_and_finds_socials() -> None:
     assert [p["role"] for p in result.pages] == ["homepage", "contact", "about"]
     assert "screen printing" in result.text and "in script" not in result.text  # scripts aren't text
     assert len(result.text) <= 2000
+    assert "Family run since 2009" in result.pages[2]["text"] and len(result.pages[2]["text"]) > 300  # full page, not the digest
     assert result.socials == {"instagram": "https://www.instagram.com/inkco", "facebook": "https://www.facebook.com/inkco"}
     assert all(s >= 2 for s in clock.slept) and len(clock.slept) == 2  # 2s between page requests
     assert "https://inkco.com/blog" not in hits

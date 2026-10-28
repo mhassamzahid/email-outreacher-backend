@@ -15,7 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import get_settings
-from crud import CompanyRepo, IcpProfileRepo, ProviderCallRepo, StakeholderRepo
+from crud import CompanyRepo, IcpProfileRepo, PostRepo, PromptRepo, ProviderCallRepo, StakeholderRepo
 from dependencies import (
     get_company_repo,
     get_icp_profile_repo,
@@ -23,6 +23,8 @@ from dependencies import (
     get_optional_apify,
     get_optional_apollo,
     get_optional_scorer,
+    get_post_repo,
+    get_prompt_repo,
     get_provider_call_repo,
     get_stakeholder_repo,
     get_website_reader,
@@ -30,6 +32,9 @@ from dependencies import (
 )
 from lead_intel import LeadIntelRepo
 from schemas import (
+    CompanyContentOut,
+    CompanyPageOut,
+    CompanyPostOut,
     CompanySearchResult,
     CompanyStatusIn,
     FindCompaniesIn,
@@ -44,7 +49,7 @@ from schemas import (
 from services.apify import EMPLOYEES_ACTOR, INSTAGRAM_PROFILE_ACTOR, ApifyClient, ApifyError
 from services.apollo import SENIORITIES, ApolloClient, ApolloError
 from services.research import research_companies
-from services.scoring import CompanyScorer
+from services.scoring import CompanyScorer, PromptSpec
 from services.website import WebsiteReader, normalize_domain
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
@@ -142,6 +147,8 @@ async def research(
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
     companies: CompanyRepo = Depends(get_company_repo),
     profiles: IcpProfileRepo = Depends(get_icp_profile_repo),
+    prompts: PromptRepo = Depends(get_prompt_repo),
+    posts: PostRepo = Depends(get_post_repo),
     calls: ProviderCallRepo = Depends(get_provider_call_repo),
     reader: WebsiteReader = Depends(get_website_reader),
     apify: ApifyClient | None = Depends(get_optional_apify),
@@ -170,11 +177,20 @@ async def research(
         profile_rows = await profiles.get_many(workspace_id, [icp_id])
         profile = profile_rows.get(icp_id)
         profile_dict = None if profile is None else {"description": profile.description, "pains": profile.pains, "offer": profile.offer}
+        version = await prompts.for_icp(workspace_id, "verify", profile.verify_prompt_id if profile else None)
+        spec = None if version is None else PromptSpec(
+            version.system_prompt, version.user_prompt, version.model, version.max_tokens, str(version.id)
+        )
         summary = await research_companies(
-            group, icp, profile_dict, reader, apify, scorer, settings.company_score_threshold
+            group, icp, profile_dict, reader, apify, scorer, settings.company_score_threshold, spec
         )
         for company in group:
             await companies.save(company)
+        # Everything read is kept: each page's full text, and the company's own Instagram posts.
+        for company_id, (via, pages) in summary.pages.items():
+            await companies.save_pages(workspace_id, company_id, via, pages)
+        for company_id, found in summary.posts.items():
+            await posts.save_company(workspace_id, company_id, found)
         if summary.apify_cost_usd:
             await calls.record(
                 workspace_id, "apify", INSTAGRAM_PROFILE_ACTOR, "succeeded", cost_usd=summary.apify_cost_usd, action="Research companies"
@@ -192,6 +208,22 @@ async def research(
         summary_total.cost_usd = round(summary_total.cost_usd + summary.apify_cost_usd, 4)
         summary_total.notes += summary.notes
     return summary_total
+
+
+@router.get("/companies/{company_id}/content", response_model=CompanyContentOut)
+async def company_content(
+    company_id: UUID,
+    workspace_id: UUID = Depends(require_workspace_id),
+    companies: CompanyRepo = Depends(get_company_repo),
+    posts: PostRepo = Depends(get_post_repo),
+) -> CompanyContentOut:
+    """What research read for a company: each website page's full text, and its own Instagram posts."""
+    if not await companies.get(workspace_id, company_id):
+        raise HTTPException(status_code=404, detail="Company not found")
+    return CompanyContentOut(
+        pages=[CompanyPageOut.model_validate(p) for p in await companies.pages(workspace_id, company_id)],
+        posts=[CompanyPostOut.model_validate(p) for p in await posts.for_company(workspace_id, company_id)],
+    )
 
 
 @router.patch("/companies/{company_id}", response_model=PipelineCompanyOut)

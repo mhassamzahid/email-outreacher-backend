@@ -10,6 +10,7 @@ from crud import (
     IcpProfileRepo,
     LeadRepo,
     PostRepo,
+    PromptRepo,
     ProviderCallRepo,
     StakeholderRepo,
     WorkspaceCompanyRepo,
@@ -58,6 +59,10 @@ def get_workspace_repo(session: AsyncSession = Depends(get_session)) -> Workspac
 
 def get_stakeholder_repo(session: AsyncSession = Depends(get_session)) -> StakeholderRepo:
     return StakeholderRepo(session)
+
+
+def get_prompt_repo(session: AsyncSession = Depends(get_session)) -> PromptRepo:
+    return PromptRepo(session)
 
 
 def get_provider_call_repo(session: AsyncSession = Depends(get_session)) -> ProviderCallRepo:

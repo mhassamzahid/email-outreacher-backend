@@ -15,11 +15,12 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from models import Company
-from services.apify import ApifyClient, ApifyError, InstagramProfile, instagram_handle
+from services.apify import ApifyClient, ApifyError, FetchedPost, InstagramProfile, instagram_handle
 from services.icp_rules import Evidence, check
-from services.scoring import CompanyScorer
+from services.scoring import CompanyScorer, PromptSpec
 from services.website import SiteRead, WebsiteReader, normalize_domain
 
 READ_CONCURRENCY = 3  # sites read at once; each site is still read one page at a time
@@ -31,6 +32,9 @@ class ResearchSummary:
     not_fit: int = 0
     errors: int = 0
     apify_cost_usd: float = 0.0
+    # What was read, for the caller to store: full page texts and the company's Instagram posts.
+    pages: dict[UUID, tuple[str, list[dict]]] = field(default_factory=dict)  # company id -> (via, pages)
+    posts: dict[UUID, list[FetchedPost]] = field(default_factory=dict)
     claude_calls: int = 0
     claude_model: str | None = None
     input_tokens: int = 0
@@ -61,21 +65,22 @@ def _evidence(company: Company, site: SiteRead | None, ig: InstagramProfile | No
 
 
 def _score_evidence(company: Company, site: SiteRead | None, ig: InstagramProfile | None) -> dict[str, Any]:
-    evidence: dict[str, Any] = {"name": company.name, "domain": company.domain}
-    if site and site.reached:
-        evidence["website"] = {"title": site.title, "text": site.text}
-    else:
-        evidence["website"] = "Couldn't be read"
-    if ig:
-        evidence["instagram"] = {
+    """What the Company Verification prompt's {{company.*}} placeholders are filled from."""
+    return {
+        "name": company.name,
+        "domain": company.domain,
+        "location": ", ".join(p for p in (company.city, company.state) if p),
+        "socials": {k: v for k, v in {
+            "instagram": company.instagram_url, "facebook": company.facebook_url,
+            "linkedin": company.linkedin_url, "x": company.twitter_url,
+        }.items() if v},
+        "website_text": "\n".join(x for x in (site.title, site.text) if x) if site and site.reached else None,
+        "instagram": None if ig is None else {
             "handle": ig.handle, "name": ig.full_name, "bio": ig.bio, "category": ig.category,
             "followers": ig.followers, "private": ig.private,
-        }  # fmt: skip
-    else:
-        evidence["instagram"] = "None linked from their website"
-    if facts := _apollo_facts(company.raw):
-        evidence["apollo"] = facts
-    return evidence
+        },
+        "apollo": _apollo_facts(company.raw),
+    }  # fmt: skip
 
 
 async def research_companies(
@@ -86,6 +91,7 @@ async def research_companies(
     apify: ApifyClient | None,
     scorer: CompanyScorer | None,
     threshold: int,
+    prompt: PromptSpec | None = None,
 ) -> ResearchSummary:
     summary = ResearchSummary()
     gate = asyncio.Semaphore(READ_CONCURRENCY)
@@ -127,7 +133,9 @@ async def research_companies(
         company.research = {
             "website": None if site is None else {
                 "outcome": site.outcome, "via": site.via, "url": site.resolved_url, "title": site.title,
-                "text": site.text, "pages": site.pages, "detail": site.detail,
+                "text": site.text, "detail": site.detail,
+                # Full page texts go to eo_company_pages; only where they came from is kept here.
+                "pages": [{k: v for k, v in page.items() if k != "text"} for page in site.pages],
             },
             "socials": {k: v for k, v in {
                 "instagram": company.instagram_url, "facebook": company.facebook_url,
@@ -135,9 +143,13 @@ async def research_companies(
             }.items() if v},
             "instagram": None if ig is None else {
                 "handle": ig.handle, "name": ig.full_name, "bio": ig.bio, "category": ig.category,
-                "followers": ig.followers, "private": ig.private, "verified": ig.verified,
+                "followers": ig.followers, "private": ig.private, "verified": ig.verified, "raw": ig.raw,
             },
         }  # fmt: skip
+        if site and site.reached and site.pages:
+            summary.pages[company.id] = (site.via or "own_crawl", site.pages)
+        if ig and ig.posts:
+            summary.posts[company.id] = ig.posts
         company.researched_at = datetime.now(UTC)
 
         unread = "" if site and site.reached else " (their website couldn't be read)"
@@ -147,7 +159,7 @@ async def research_companies(
         elif scorer is None:
             status, reason = "qualified", f"Passes the ICP's rule: {rule.reason}. Not scored: ANTHROPIC_API_KEY is not set"
         else:
-            result = await scorer.score(icp, profile, _score_evidence(company, site, ig))
+            result = await scorer.score(icp, profile, _score_evidence(company, site, ig), prompt)
             summary.claude_calls += 1
             summary.claude_model = result.model
             summary.input_tokens += result.input_tokens
@@ -156,6 +168,8 @@ async def research_companies(
             company.score_detail = {
                 "summary": result.summary, "reasons": result.reasons, "concerns": result.concerns,
                 "model": result.model, "error": result.error,
+                "prompt_version_id": prompt.version_id if prompt else None,
+                "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
             }  # fmt: skip
             if result.error:
                 status, reason = "error", result.error

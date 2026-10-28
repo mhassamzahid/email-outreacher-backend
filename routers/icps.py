@@ -3,11 +3,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from config import get_settings
-from crud import IcpProfileRepo
+from crud import IcpProfileRepo, PromptRepo
 from dependencies import (
     get_icp_profile_repo,
     get_lead_intel_icp_writer,
     get_lead_intel_repo,
+    get_prompt_repo,
     get_workspace_id,
     require_workspace_id,
 )
@@ -94,11 +95,19 @@ async def save_icp_profile(
     workspace_id: UUID = Depends(require_workspace_id),
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
     profiles: IcpProfileRepo = Depends(get_icp_profile_repo),
+    prompts: PromptRepo = Depends(get_prompt_repo),
 ) -> IcpProfileOut:
     """Save a workspace's outreach settings for a Lead Intel ICP. Writes `outreach.eo_icp_profiles` only."""
     if not await profiles.workspace_exists(workspace_id):
         raise HTTPException(status_code=404, detail="Workspace not found")
     if not await lead_intel.get_icp(icp_id):
         raise HTTPException(status_code=404, detail="ICP not found")
+    # A chosen prompt must be this workspace's, and of the right kind.
+    for kind, prompt_id in (("verify", body.verify_prompt_id), ("hook", body.hook_prompt_id), ("email", body.email_prompt_id)):
+        if prompt_id is None:
+            continue
+        prompt = await prompts.get(workspace_id, prompt_id)
+        if prompt is None or prompt.kind != kind:
+            raise HTTPException(status_code=422, detail=f"That {kind} prompt isn't one of this workspace's")
     profile = await profiles.upsert(workspace_id, icp_id, body.model_dump())
     return IcpProfileOut.model_validate(profile)

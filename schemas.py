@@ -37,6 +37,8 @@ class IcpProfileIn(ApiModel):
     words_to_avoid: str = ""
     hook_guidance: str = ""
     enabled_sources: list[str] = []
+    # Null uses the workspace's default prompt of that kind.
+    verify_prompt_id: UUID | None = None
     hook_prompt_id: UUID | None = None
     email_prompt_id: UUID | None = None
 
@@ -522,3 +524,87 @@ class UsageOut(ApiModel):
     providers: list[ProviderUsage]
     actions: list[ActionUsage]
     recent: list[ProviderCallOut]
+
+
+# ---------- Prompts ----------
+
+PromptKind = Literal["verify", "hook", "email", "score"]
+
+
+class PromptVersionIn(ApiModel):
+    system_prompt: str = Field(default="", max_length=20000)
+    user_prompt: str = Field(min_length=1, max_length=40000)
+    model: str = Field(min_length=1, max_length=100)
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    max_tokens: int = Field(default=600, gt=0, le=64000)
+
+
+class PromptVersionOut(PromptVersionIn):
+    id: UUID
+    prompt_id: UUID = Field(serialization_alias="templateId")
+    version: int
+    note: str
+    created_at: datetime
+
+
+class PromptOut(ApiModel):
+    id: UUID
+    name: str
+    kind: PromptKind
+    is_default: bool
+    current_version_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PromptsOut(ApiModel):
+    prompts: list[PromptOut]
+    versions: list[PromptVersionOut]
+
+
+class PromptCreateIn(ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+    kind: PromptKind
+    version: PromptVersionIn
+    note: str = Field(default="", max_length=500)
+    is_default: bool = False
+
+
+class NewVersionIn(PromptVersionIn):
+    note: str = Field(default="", max_length=500)
+
+
+class PromptUpdateIn(ApiModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    is_default: Literal[True] | None = None
+
+
+class PromptWithVersion(ApiModel):
+    prompt: PromptOut
+    version: PromptVersionOut
+
+
+# ---------- What research read for a company ----------
+
+
+class CompanyPageOut(ApiModel):
+    url: str
+    role: str
+    via: str
+    status: int | None
+    text: str
+    fetched_at: datetime
+
+
+class CompanyPostOut(ApiModel):
+    id: UUID
+    source: str
+    url: str
+    posted_at: datetime | None
+    text: str
+    media_type: str
+
+
+class CompanyContentOut(ApiModel):
+    pages: list[CompanyPageOut]
+    posts: list[CompanyPostOut]

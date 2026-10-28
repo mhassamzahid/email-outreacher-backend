@@ -1,6 +1,6 @@
 """Reads and writes for our own `outreach.eo_` tables. Lead Intel is read in lead_intel.py, never here."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -8,10 +8,14 @@ from sqlalchemy import case, delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Company, IcpProfile, Lead, Post, ProviderCall, Stakeholder, Workspace, WorkspaceCompany
+from models import (
+    Company, CompanyPage, IcpProfile, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder, Workspace,
+    WorkspaceCompany,
+)  # fmt: skip
 from services.apify import Employee, FetchedPost
 from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
 from services.leads import Existing, LeadInput
+from services.prompts import DEFAULTS
 
 
 class IcpProfileRepo:
@@ -44,6 +48,131 @@ class IcpProfileRepo:
         profile = (await self.session.scalars(statement)).one()
         await self.session.commit()
         return profile
+
+
+class PromptRepo:
+    """Prompt templates and their versions. `outreach.eo_prompts` and `eo_prompt_versions` only.
+
+    Every workspace has one default prompt of each kind; missing ones are created from the
+    built-in defaults the first time the workspace's prompts are read.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def workspace_exists(self, workspace_id: UUID) -> bool:
+        return (await self.session.get(Workspace, workspace_id)) is not None
+
+    async def ensure_defaults(self, workspace_id: UUID) -> None:
+        have = set(await self.session.scalars(select(Prompt.kind).where(Prompt.workspace_id == workspace_id).distinct()))
+        missing = [k for k in DEFAULTS if k not in have]
+        if not missing:
+            return
+        for kind in missing:
+            d = DEFAULTS[kind]
+            prompt = Prompt(workspace_id=workspace_id, name=d.name, kind=kind, is_default=True)
+            self.session.add(prompt)
+            await self.session.flush()
+            version = PromptVersion(
+                prompt_id=prompt.id, version=1, system_prompt=d.system_prompt, user_prompt=d.user_prompt, model=d.model,
+                temperature=d.temperature, max_tokens=d.max_tokens, note="Built-in default",
+            )  # fmt: skip
+            self.session.add(version)
+            await self.session.flush()
+            prompt.current_version_id = version.id
+        await self.session.commit()
+
+    async def list(self, workspace_id: UUID) -> tuple[list[Prompt], list[PromptVersion]]:
+        prompts = list(
+            await self.session.scalars(
+                select(Prompt).where(Prompt.workspace_id == workspace_id).order_by(Prompt.kind, Prompt.created_at)
+            )
+        )
+        if not prompts:
+            return [], []
+        versions = await self.session.scalars(
+            select(PromptVersion)
+            .where(PromptVersion.prompt_id.in_([p.id for p in prompts]))
+            .order_by(PromptVersion.prompt_id, PromptVersion.version)
+        )
+        return prompts, list(versions)
+
+    async def get(self, workspace_id: UUID, prompt_id: UUID) -> Prompt | None:
+        prompt = await self.session.get(Prompt, prompt_id)
+        return prompt if prompt and prompt.workspace_id == workspace_id else None
+
+    async def current_version(self, prompt: Prompt) -> PromptVersion | None:
+        return await self.session.get(PromptVersion, prompt.current_version_id) if prompt.current_version_id else None
+
+    async def default(self, workspace_id: UUID, kind: str) -> Prompt | None:
+        return await self.session.scalar(
+            select(Prompt).where(Prompt.workspace_id == workspace_id, Prompt.kind == kind, Prompt.is_default)
+        )
+
+    async def for_icp(self, workspace_id: UUID, kind: str, chosen_id: UUID | None) -> PromptVersion | None:
+        """The current version of the ICP's chosen prompt of this kind, else the workspace default's."""
+        prompt = await self.get(workspace_id, chosen_id) if chosen_id else None
+        if prompt is None or prompt.kind != kind:
+            await self.ensure_defaults(workspace_id)
+            prompt = await self.default(workspace_id, kind)
+        return await self.current_version(prompt) if prompt else None
+
+    async def create(
+        self, workspace_id: UUID, name: str, kind: str, draft: dict[str, Any], note: str
+    ) -> tuple[Prompt, PromptVersion]:
+        await self.ensure_defaults(workspace_id)
+        prompt = Prompt(workspace_id=workspace_id, name=name, kind=kind, is_default=False)
+        self.session.add(prompt)
+        await self.session.flush()
+        version = await self._add_version(prompt, draft, note)
+        await self.session.commit()
+        return prompt, version
+
+    async def add_version(self, prompt: Prompt, draft: dict[str, Any], note: str) -> PromptVersion:
+        version = await self._add_version(prompt, draft, note)
+        await self.session.commit()
+        return version
+
+    async def _add_version(self, prompt: Prompt, draft: dict[str, Any], note: str) -> PromptVersion:
+        latest = await self.session.scalar(
+            select(func.max(PromptVersion.version)).where(PromptVersion.prompt_id == prompt.id)
+        )
+        version = PromptVersion(prompt_id=prompt.id, version=(latest or 0) + 1, note=note, **draft)
+        self.session.add(version)
+        await self.session.flush()
+        prompt.current_version_id = version.id
+        prompt.updated_at = datetime.now(UTC)
+        return version
+
+    async def rename(self, prompt: Prompt, name: str) -> None:
+        prompt.name = name
+        prompt.updated_at = datetime.now(UTC)
+        await self.session.commit()
+        await self.session.refresh(prompt)
+
+    async def make_default(self, prompt: Prompt) -> None:
+        # One default per kind (a unique index): clear the old one before setting the new one.
+        old = await self.default(prompt.workspace_id, prompt.kind)
+        if old and old.id != prompt.id:
+            old.is_default = False
+            await self.session.flush()
+        prompt.is_default = True
+        await self.session.commit()
+        # The row's update timestamp is set by the database; read it back.
+        await self.session.refresh(prompt)
+
+    async def in_use(self, prompt: Prompt) -> int:
+        """How many ICP profiles chose this prompt."""
+        column = {
+            "verify": IcpProfile.verify_prompt_id, "hook": IcpProfile.hook_prompt_id, "email": IcpProfile.email_prompt_id,
+        }.get(prompt.kind)  # fmt: skip
+        if column is None:
+            return 0
+        return await self.session.scalar(select(func.count()).select_from(IcpProfile).where(column == prompt.id)) or 0
+
+    async def delete(self, prompt: Prompt) -> None:
+        await self.session.delete(prompt)
+        await self.session.commit()
 
 
 _full_name = func.lower(func.trim(func.concat(Lead.first_name, " ", Lead.last_name)))
@@ -531,15 +660,37 @@ class PostRepo:
         lead.status = status
         await self.session.commit()
 
+    async def save_company(self, workspace_id: UUID, company_id: UUID, posts: list[FetchedPost]) -> int:
+        """Store a pipeline company's own posts it doesn't have yet; returns how many were new."""
+        new = 0
+        for p in posts:
+            statement = (
+                insert(Post)
+                .values(
+                    workspace_id=workspace_id, company_id=company_id, source=p.source, url=p.url, external_id=p.external_id,
+                    posted_at=p.posted_at, text=p.text, media_type=p.media_type, is_repost=p.is_repost, raw=p.raw,
+                )
+                .on_conflict_do_nothing()
+                .returning(Post.id)
+            )  # fmt: skip
+            new += (await self.session.execute(statement)).scalar_one_or_none() is not None
+        await self.session.commit()
+        return new
+
+    async def for_company(self, workspace_id: UUID, company_id: UUID) -> list[Post]:
+        query = select(Post).where(Post.workspace_id == workspace_id, Post.company_id == company_id)
+        return list(await self.session.scalars(query.order_by(Post.posted_at.desc().nulls_last(), Post.id)))
+
     async def list(self, workspace_id: UUID, lead_id: UUID | None) -> list[Post]:
-        query = select(Post).where(Post.workspace_id == workspace_id)
+        # Leads' posts only; a company's own posts are read with for_company.
+        query = select(Post).where(Post.workspace_id == workspace_id, Post.lead_id.is_not(None))
         if lead_id:
             query = query.where(Post.lead_id == lead_id)
         return list(await self.session.scalars(query.order_by(Post.posted_at.desc().nulls_last(), Post.id)))
 
 
 class CompanyRepo:
-    """The workspace's company pipeline. Reads and writes `outreach.eo_companies` only."""
+    """The workspace's company pipeline. Reads and writes `outreach.eo_companies` and `eo_company_pages` only."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -553,6 +704,23 @@ class CompanyRepo:
 
     async def get(self, workspace_id: UUID, company_id: UUID) -> Company | None:
         return await self.session.scalar(select(Company).where(Company.workspace_id == workspace_id, Company.id == company_id))
+
+    async def save_pages(self, workspace_id: UUID, company_id: UUID, via: str, pages: list[dict[str, Any]]) -> None:
+        """Store the pages read from a company's website; a page read again replaces its old text."""
+        for page in pages:
+            values = {"role": page["role"], "via": via, "status": page.get("status"), "text": page.get("text") or ""}
+            await self.session.execute(
+                insert(CompanyPage)
+                .values(workspace_id=workspace_id, company_id=company_id, url=page["url"], **values)
+                .on_conflict_do_update(
+                    index_elements=[CompanyPage.company_id, CompanyPage.url], set_={**values, "fetched_at": func.now()}
+                )
+            )
+        await self.session.commit()
+
+    async def pages(self, workspace_id: UUID, company_id: UUID) -> list[CompanyPage]:
+        query = select(CompanyPage).where(CompanyPage.workspace_id == workspace_id, CompanyPage.company_id == company_id)
+        return list(await self.session.scalars(query.order_by(CompanyPage.fetched_at, CompanyPage.url)))
 
     async def list(self, workspace_id: UUID, icp_id: UUID | None, status: str | None) -> list[Company]:
         query = select(Company).where(Company.workspace_id == workspace_id)

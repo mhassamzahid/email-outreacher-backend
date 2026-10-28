@@ -32,6 +32,8 @@ MIN_DELAY_SECONDS = 2.0
 MAX_PAGES = 4
 MAX_BYTES = 5 * 1024 * 1024
 TEXT_LIMIT = 2000
+# Each page's own text is kept too (stored in eo_company_pages), up to this much.
+PAGE_TEXT_LIMIT = 50_000
 # Below this many characters of text, a page probably renders with JavaScript.
 THIN_TEXT = 200
 
@@ -60,7 +62,7 @@ class SiteRead:
     resolved_url: str | None = None
     text: str = ""
     title: str = ""
-    pages: list[dict] = field(default_factory=list)  # [{url, role, status}]
+    pages: list[dict] = field(default_factory=list)  # [{url, role, status, text}]
     socials: dict[str, str] = field(default_factory=dict)  # {"instagram": "https://instagram.com/x", ...}
     detail: str | None = None
 
@@ -133,6 +135,10 @@ def find_socials(sources: list[str]) -> dict[str, str]:
 
 def digest(texts: list[str]) -> str:
     return re.sub(r"\s+", " ", " ".join(texts)).strip()[:TEXT_LIMIT]
+
+
+def page_text(text: str) -> str:
+    return re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n+", "\n\n", text)).strip()[:PAGE_TEXT_LIMIT]
 
 
 def normalize_domain(value: str | None) -> str | None:
@@ -222,7 +228,7 @@ class WebsiteReader:
         texts = [text]
         all_links = list(links)
         sources = [homepage.text]
-        pages = [{"url": home_url, "role": "homepage", "status": homepage.status_code}]
+        pages = [{"url": home_url, "role": "homepage", "status": homepage.status_code, "text": page_text(text)}]
 
         # Contact, social and about pages on the same site, in that order of value.
         site_host = urlsplit(home_url).netloc
@@ -242,11 +248,11 @@ class WebsiteReader:
             page = await polite_get(url)
             if page is None or page.status_code >= 400:
                 continue
-            page_text, _, page_links = parse_html(page.text)
-            texts.append(page_text)
+            body, _, page_links = parse_html(page.text)
+            texts.append(body)
             all_links.extend(page_links)
             sources.append(page.text)
-            pages.append({"url": str(page.url), "role": role, "status": page.status_code})
+            pages.append({"url": str(page.url), "role": role, "status": page.status_code, "text": page_text(body)})
 
         result = SiteRead(
             domain=domain,
@@ -285,6 +291,6 @@ class WebsiteReader:
             resolved_url=page.url or url,
             text=text,
             title=page.title,
-            pages=[{"url": page.url or url, "role": "homepage", "status": 200}],
+            pages=[{"url": page.url or url, "role": "homepage", "status": 200, "text": page_text(page.content)}],
             socials={**fallback.socials, **socials},
         )

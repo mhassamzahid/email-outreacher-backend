@@ -164,3 +164,22 @@ async def test_linkedin_repost_is_matched_by_query_and_flagged() -> None:
     [p], _ = await c.linkedin_posts(["https://www.linkedin.com/in/ava-morgan/"], 2, datetime.now(UTC))
     await c.aclose()
     assert p.owner_key == "ava-morgan" and p.is_repost
+
+
+@sync
+async def test_instagram_profiles_keep_raw_data_and_latest_posts() -> None:
+    items = [{
+        "username": "InkCo", "fullName": "Ink Co", "biography": "Custom tees", "followersCount": 1200,
+        "businessCategoryName": "Printing service", "private": False, "verified": False,
+        "latestPosts": [{"url": "https://www.instagram.com/p/X1/", "id": "9", "type": "Video", "caption": "Fresh drop",
+                         "timestamp": "2026-10-20T10:00:00.000Z"}],
+    }]  # fmt: skip
+    transport, seen = fake_apify(items)
+    c = client(transport)
+    profiles, _ = await c.instagram_profiles(["@InkCo"])
+    await c.aclose()
+    assert seen["input"] == {"usernames": ["inkco"]}
+    ink = profiles["inkco"]
+    assert ink.raw["biography"] == "Custom tees" and "latestPosts" not in ink.raw
+    [post] = ink.posts
+    assert (post.url, post.media_type, post.text, post.owner_key) == ("https://www.instagram.com/p/X1/", "video", "Fresh drop", "inkco")

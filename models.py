@@ -225,7 +225,8 @@ class Settings(Base):
 class Prompt(Base):
     __tablename__ = "eo_prompts"
     __table_args__ = (
-        CheckConstraint(_in("kind", ("hook", "email", "score")), name="kind"),
+        # verify: company verification, hook: hook selection, email: email generation, score: email scoring.
+        CheckConstraint(_in("kind", ("verify", "hook", "email", "score")), name="kind"),
         # At most one default per kind in a workspace.
         Index(
             "eo_prompts_one_default_idx",
@@ -295,6 +296,7 @@ class IcpProfile(Base):
     # Null uses the workspace's default prompt of that kind.
     hook_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
     email_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
+    verify_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
 
@@ -458,18 +460,21 @@ class ProviderCall(Base):
 
 
 class Post(Base):
-    """A piece of a lead's recent content: a LinkedIn or Instagram post, or a website page."""
+    """A recent post: a lead's (LinkedIn or Instagram), or a pipeline company's own Instagram post."""
 
     __tablename__ = "eo_posts"
     __table_args__ = (
         CheckConstraint(_in("source", SOURCES), name="source"),
         CheckConstraint(_in("media_type", ("text", "image", "video", "carousel", "article", "page")), name="media_type"),
+        CheckConstraint("lead_id is not null or company_id is not null", name="owner"),
         UniqueConstraint("lead_id", "url"),
+        UniqueConstraint("company_id", "url"),
     )
 
     id: Mapped[UUID] = _uuid_pk()
     workspace_id: Mapped[UUID] = _workspace()
-    lead_id: Mapped[UUID] = mapped_column(ForeignKey("eo_leads.id", ondelete="CASCADE"))
+    lead_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_leads.id", ondelete="CASCADE"), default=None)
+    company_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_companies.id", ondelete="CASCADE"), default=None)
     source: Mapped[str] = mapped_column(Text)
     url: Mapped[str] = mapped_column(Text)
     external_id: Mapped[str | None] = mapped_column(Text, default=None)
@@ -574,3 +579,20 @@ class SendEvent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = _created()
+
+
+class CompanyPage(Base):
+    """A page of a pipeline company's website as it was read: its full text, up to 50,000 characters."""
+
+    __tablename__ = "eo_company_pages"
+    __table_args__ = (UniqueConstraint("company_id", "url"),)
+
+    id: Mapped[UUID] = _uuid_pk()
+    workspace_id: Mapped[UUID] = _workspace()
+    company_id: Mapped[UUID] = mapped_column(ForeignKey("eo_companies.id", ondelete="CASCADE"))
+    url: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(Text)  # homepage | contact | social | about
+    via: Mapped[str] = mapped_column(Text)  # own_crawl | jina
+    status: Mapped[int | None] = mapped_column(Integer, default=None)
+    text: Mapped[str] = mapped_column(Text, server_default="")
+    fetched_at: Mapped[datetime] = _created()
