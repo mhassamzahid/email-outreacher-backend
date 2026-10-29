@@ -69,8 +69,8 @@ async def create_icp(
     writer: LeadIntelIcpWriter = Depends(get_lead_intel_icp_writer),
     _: object = Depends(require_manager),
 ) -> Icp:
-    """Add a new ICP to Lead Intel's icps table, shared by both projects. Lead Intel assigns businesses
-    to it on its next match."""
+    """Add a new ICP to Lead Intel's icps table, which this app keeps using after Lead Intel shuts down.
+    Companies for it come from Google Maps or Apollo searches, not from Lead Intel's matching."""
     created_by = get_settings().lead_intel_icp_created_by
     if not created_by:
         raise HTTPException(status_code=503, detail="LEAD_INTEL_ICP_CREATED_BY is not set")
@@ -92,7 +92,7 @@ async def update_icp(
     _: object = Depends(require_manager),
 ) -> Icp:
     """Edit an ICP's own fields in Lead Intel's icps table (shared: Lead Intel sees the change too).
-    Only that ICP's row is updated; its businesses are re-matched by Lead Intel on its next run."""
+    Only that ICP's row is updated. The next searches and research use the new definition."""
     values = _validated(body)
     if await writer.name_taken(values["name"], except_id=icp_id):
         raise HTTPException(status_code=409, detail="Another ICP in Lead Intel already has this name")

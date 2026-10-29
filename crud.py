@@ -10,11 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
     Company, CompanyPage, Email, EmailFeedback, ExampleEmail, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
-    User, Workspace, WorkspaceCompany, WorkspaceMember,
+    Exclusion, User, Workspace, WorkspaceCompany, WorkspaceMember,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
 from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
 from services.google_places import Place
+from services.identity import identity_keys
 from services.leads import Existing, LeadInput
 from services.prompts import DEFAULTS
 
@@ -380,6 +381,77 @@ class WorkspaceRepo:
         await self.session.commit()
 
 
+def person_keys(email: str | None, domain: str | None = None) -> list[tuple[str, str]]:
+    """The exclusion keys a person matches: their email, its domain, and their company's domain."""
+    keys: list[tuple[str, str]] = []
+    if email and "@" in email:
+        keys += [("email", email.strip().lower()), ("domain", email.split("@")[1].strip().lower())]
+    if domain:
+        keys.append(("domain", domain.strip().lower()))
+    return keys
+
+
+REASON_LABEL = {
+    "current_client": "a current client", "past_client": "a past client", "do_not_contact": "asked not to be contacted",
+    "competitor": "a competitor", "other": "on the list",
+}  # fmt: skip
+
+
+def exclusion_note(e: Exclusion) -> str:
+    """'On the do-not-contact list: a current client (inkco.com)'."""
+    return f"On the do-not-contact list: {REASON_LABEL.get(e.reason, e.reason)} ({e.key_value})"
+
+
+async def excluded(session: AsyncSession, keys: list[tuple[str, str]]) -> Exclusion | None:
+    """The do-not-contact entry any of these keys hits, if one does."""
+    if not keys:
+        return None
+    query = select(Exclusion).where(tuple_(Exclusion.key_type, Exclusion.key_value).in_(keys)).limit(1)
+    return await session.scalar(query)
+
+
+class ExclusionRepo:
+    """The do-not-contact list, `outreach.eo_exclusions`. Shared by every workspace."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list(self) -> list[Exclusion]:
+        return list(await self.session.scalars(select(Exclusion).order_by(Exclusion.created_at.desc())))
+
+    async def add(self, entries: list[dict[str, Any]], added_by: UUID | None) -> list[Exclusion]:
+        """Add entries ({key_type, key_value, reason, business_name, note}); ones already listed are
+        left as they are. Returns the new ones."""
+        added = []
+        for entry in entries:
+            row = await self.session.scalar(
+                insert(Exclusion).values(**entry, added_by=added_by).on_conflict_do_nothing().returning(Exclusion)
+            )
+            if row is not None:
+                added.append(row)
+        await self.session.commit()
+        return added
+
+    async def get(self, exclusion_id: UUID) -> Exclusion | None:
+        return await self.session.get(Exclusion, exclusion_id)
+
+    async def delete(self, exclusion: Exclusion) -> None:
+        await self.session.delete(exclusion)
+        await self.session.commit()
+
+    async def matcher(self):
+        """A function telling, from one read of the list, whether any of some keys is excluded."""
+        rows = {(e.key_type, e.key_value): e for e in await self.list()}
+
+        def hit(keys: list[tuple[str, str]]) -> Exclusion | None:
+            return next((rows[k] for k in keys if k in rows), None)
+
+        return hit
+
+    async def match(self, keys: list[tuple[str, str]]) -> Exclusion | None:
+        return await excluded(self.session, keys)
+
+
 class UserRepo:
     """People who sign in, with their role and workspaces. `outreach.eo_users` and
     `eo_workspace_members` only: Supabase's own auth.users is never written from here."""
@@ -739,7 +811,10 @@ async def lead_from_stakeholder(
     """The lead for a revealed person: created, or the existing one with the same email or LinkedIn.
 
     Returns (lead id, whether it was created). The unique indexes decide what counts as the same person.
+    Someone on the do-not-contact list doesn't become a lead: (None, False).
     """
+    if await excluded(session, person_keys(lead.email, lead.domain)):
+        return None, False
     statement = (
         insert(Lead)
         .values(
@@ -995,15 +1070,15 @@ class CompanyRepo:
 
     async def add_google_maps(self, workspace_id: UUID, icp_id: UUID, places: list[tuple[Place, str | None]]) -> tuple[int, int]:
         """Add Google Maps businesses to be researched, each with its website domain (or None).
-        Returns (added, duplicates): the same place id, or the same domain as a company already here
-        from any source, is a duplicate."""
-        _, _, by_domain = await self._by_keys(workspace_id)
-        by_place = set(await self.session.scalars(
-            select(Company.google_place_id).where(Company.workspace_id == workspace_id, Company.google_place_id.is_not(None))
-        ))  # fmt: skip
+        Returns (added, duplicates). A duplicate shares any identity key with a company already here,
+        from any source: place id, domain, phone, or name and city (Lead Intel's keys)."""
+        known: set[tuple[str, str]] = set()
+        for c in await self.session.scalars(select(Company).where(Company.workspace_id == workspace_id)):
+            known |= set(identity_keys(place_id=c.google_place_id, domain=c.domain, phone=c.phone, name=c.name, city=c.city, state=c.state))
         added = dupes = 0
         for place, domain in places:
-            if place.place_id in by_place or (domain and domain in by_domain):
+            keys = identity_keys(place_id=place.place_id, domain=domain, phone=place.phone, name=place.name, city=place.city, state=place.state)
+            if known.intersection(keys):
                 dupes += 1
                 continue
             row = Company(
@@ -1024,9 +1099,7 @@ class CompanyRepo:
                 },
             )  # fmt: skip
             self.session.add(row)
-            by_place.add(place.place_id)
-            if domain:
-                by_domain[domain] = row
+            known |= set(keys)
             added += 1
         await self.session.commit()
         return added, dupes

@@ -17,6 +17,7 @@ from uuid import UUID
 import jwt
 
 AUDIENCE = "authenticated"
+CLOCK_LEEWAY = 60  # seconds
 
 
 class AuthError(Exception):
@@ -59,7 +60,8 @@ async def verify(token: str, jwks_url: str, issuer: str) -> TokenClaims:
     try:
         # Fetching the keys is a blocking HTTP call on a cache miss, so it runs off the event loop.
         key = await asyncio.to_thread(_jwks(jwks_url).get_signing_key_from_jwt, token)
-        claims = jwt.decode(token, key.key, algorithms=["ES256", "RS256"], audience=AUDIENCE, issuer=issuer)
+        # Leeway: a server clock a second behind Supabase's would otherwise refuse a token issued just now.
+        claims = jwt.decode(token, key.key, algorithms=["ES256", "RS256"], audience=AUDIENCE, issuer=issuer, leeway=CLOCK_LEEWAY)
     except jwt.ExpiredSignatureError as exc:
         raise AuthError("Your session has expired. Sign in again.") from exc
     except jwt.PyJWKClientError as exc:

@@ -6,8 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from dependencies import get_current_user
 from routers import (
-    companies, emails, examples, health, icps, improve, leads, pipeline, posts, products, prompts, settings, stakeholders,
-    usage, users, workspaces,
+    companies, emails, examples, exclusions, health, icps, improve, leads, pipeline, posts, products, prompts, settings,
+    stakeholders, usage, users, workspaces,
 )  # fmt: skip
 
 
@@ -31,6 +31,7 @@ protected.include_router(improve.router)
 protected.include_router(settings.router)
 protected.include_router(products.router)
 protected.include_router(examples.router)
+protected.include_router(exclusions.router)
 api_router.include_router(protected)
 
 

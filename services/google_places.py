@@ -23,6 +23,8 @@ from typing import Any
 
 import httpx
 
+from services.identity import shared_domain  # noqa: F401  (re-exported: the find route imports it from here)
+
 ENDPOINT = "https://places.googleapis.com/v1/places:searchText"
 SEARCH_COST_USD = 0.035
 CENTER_COST_USD = 0.032
@@ -102,44 +104,6 @@ class AreaSearch:
     @property
     def cost_usd(self) -> float:
         return round(self.searches * SEARCH_COST_USD + self.center_lookups * CENTER_COST_USD, 4)
-
-
-# ---------- Whose website is it ----------
-
-# From Lead Intel (packages/core/src/normalize/shared-domain.ts): a Maps listing's "website" is
-# often a booking or site-builder profile, or a national chain's store page. Read as the business's
-# own site, research would describe Booksy or Walmart instead of the shop.
-PLATFORM_DOMAINS = {
-    "booksy.com", "vagaro.com", "styleseat.com", "square.site", "squareup.com", "as.me",
-    "acuityscheduling.com", "setmore.com", "schedulicity.com", "mindbodyonline.com", "glossgenius.com",
-    "fresha.com", "simplybook.me", "zenoti.com", "janeapp.com", "mytime.com", "company.site",
-    "business.site", "sites.google.com", "godaddysites.com", "wixsite.com", "weebly.com",
-    "myshopify.com", "bigcartel.com", "etsy.com", "ecwid.com", "linktr.ee", "linktree.com",
-    "beacons.ai", "facebook.com", "instagram.com", "yelp.com", "opentable.com", "resy.com",
-    "doordash.com", "ubereats.com", "grubhub.com", "toasttab.com", "clover.com",
-}  # fmt: skip
-CHAIN_DOMAINS = {
-    "costco.com", "walmart.com", "samsclub.com", "target.com", "targetoptical.com", "jcpenney.com",
-    "jcpenneyoptical.com", "lenscrafters.com", "pearlevision.com", "visionworks.com",
-    "americasbest.com", "eyemart.com", "eyemartexpress.com", "myeyedr.com", "warbyparker.com",
-    "stantonoptical.com", "bjs.com", "fullypromoted.com", "michaels.com", "joann.com",
-    "hobbylobby.com", "staples.com", "officedepot.com", "fedex.com", "theupsstore.com",
-    "vistaprint.com", "greatclips.com", "supercuts.com", "sportclips.com", "regissalons.com",
-    "bigfrog.com", "instantimprints.com", "fastsigns.com", "signarama.com", "minutemanpress.com",
-    "alphagraphics.com", "customink.com",
-}  # fmt: skip
-
-
-def shared_domain(domain: str | None) -> str | None:
-    """"platform" or "chain" when the domain isn't the business's own, else None."""
-    if not domain:
-        return None
-    d = domain.lower().strip()
-    if any(d == s or d.endswith(f".{s}") for s in PLATFORM_DOMAINS):
-        return "platform"
-    if any(d == s or d.endswith(f".{s}") for s in CHAIN_DOMAINS):
-        return "chain"
-    return None
 
 
 # ---------- Grid math (pure) ----------

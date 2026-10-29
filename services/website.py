@@ -27,6 +27,7 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
+from services.contacts import contact_links, founder_names
 from services.jina import JinaClient, JinaError
 
 USER_AGENT = "AheadTech360LeadBot/1.0 (+https://aheadtech360.com)"
@@ -74,6 +75,10 @@ class SiteRead:
     title: str = ""
     pages: list[dict] = field(default_factory=list)  # [{url, role, status, text}]
     socials: dict[str, str] = field(default_factory=dict)  # {"instagram": "https://instagram.com/x", ...}
+    # For contact details (services/contacts.py): mailto and tel links, and founders named in structured data.
+    mailtos: list[str] = field(default_factory=list)
+    tels: list[str] = field(default_factory=list)
+    owner_names: list[str] = field(default_factory=list)
     detail: str | None = None
     # Pages on the same site not read yet: [{url, text}] (text is the link's words). See read_more.
     candidates: list[dict] = field(default_factory=list)
@@ -312,6 +317,9 @@ class WebsiteReader:
             title=title,
             pages=pages,
             socials=find_socials([urljoin(home_url, link) for link in all_links] + sources),
+            mailtos=contact_links(all_links)[0],
+            tels=contact_links(all_links)[1],
+            owner_names=[n for source in sources for n in founder_names(source)],
             candidates=same_site_pages(home_url, anchors, {p["url"].rstrip("/") for p in pages}),
             session={"robots": robots, "delay": delay, "started": self._clock(), "last": self._clock(), "texts": texts},
         )
@@ -345,6 +353,8 @@ class WebsiteReader:
             title=page.title,
             pages=[{"url": home, "role": "homepage", "status": 200, "text": page_text(page.content)}],
             socials={**fallback.socials, **socials},
+            mailtos=contact_links(page.links)[0],
+            tels=contact_links(page.links)[1],
             candidates=same_site_pages(home, [(link, "") for link in page.links], {home.rstrip("/")}),
             session={"robots": robots, "delay": MIN_DELAY_SECONDS, "started": self._clock(), "last": self._clock(),
                      "texts": [page.content]},  # fmt: skip
@@ -405,4 +415,8 @@ class WebsiteReader:
                             {x["url"].rstrip("/") for x in site.candidates}]  # fmt: skip
         site.candidates = site.candidates[:MAX_CANDIDATES]
         site.socials = {**find_socials([urljoin(final_url, h) for h, _ in anchors] + [source]), **site.socials}
+        mailtos, tels = contact_links([h for h, _ in anchors])
+        site.mailtos = list(dict.fromkeys(site.mailtos + mailtos))
+        site.tels = list(dict.fromkeys(site.tels + tels))
+        site.owner_names = list(dict.fromkeys(site.owner_names + founder_names(source)))
         return page

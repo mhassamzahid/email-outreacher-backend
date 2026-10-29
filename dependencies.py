@@ -11,6 +11,7 @@ from crud import (
     CompanyRepo,
     EmailRepo,
     ExampleRepo,
+    ExclusionRepo,
     FeedbackRepo,
     IcpProfileRepo,
     LeadRepo,
@@ -39,6 +40,10 @@ from services.website import WebsiteReader
 
 def get_lead_intel_repo(conn: AsyncConnection = Depends(get_readonly_conn)) -> LeadIntelRepo:
     return LeadIntelRepo(conn)
+
+
+def get_exclusion_repo(session: AsyncSession = Depends(get_session)) -> ExclusionRepo:
+    return ExclusionRepo(session)
 
 
 def get_user_repo(session: AsyncSession = Depends(get_session)) -> UserRepo:

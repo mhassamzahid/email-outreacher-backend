@@ -39,8 +39,8 @@ Check the connection and that Lead Intel still has every column we read:
 ## Sign-in
 
 Supabase Auth, email and password. There's no sign-up: accounts are made, and passwords reset, in the
-Supabase dashboard (Authentication > Users). The app also has "Forgot password?", which emails a link
-to `/reset-password`; add the frontend's `/reset-password` address to Supabase's Redirect URLs.
+Supabase dashboard (Authentication > Users). Signed in, anyone can change their own password from the
+sidebar. It's the shared Supabase account, so the change applies to Lead Intel too.
 
 Every route except health needs `Authorization: Bearer <Supabase access token>`, checked against the
 project's public keys (`SUPABASE_JWKS_URL`, or the standard address under `SUPABASE_URL`). Supabase Auth
@@ -52,6 +52,9 @@ Admins open every workspace and manage users and workspaces; Management and admi
 
 | Method | Path | |
 |---|---|---|
+| GET/POST | `/api/v1/exclusions` | The do-not-contact list (every workspace): companies by domain, phone, Google place id or name and city; people by email or its domain. Excluded ones are never found, made leads, or written to. Management and admins change it |
+| DELETE | `/api/v1/exclusions/{id}` | Take an entry off the list |
+| POST | `/api/v1/exclusions/company/{companyId}` | Put a pipeline company on the list by every key it has, and mark it not a fit |
 | GET | `/api/v1/me` | The signed-in person: role, status and workspaces |
 | GET/POST | `/api/v1/users` | Admins: everyone; add someone by email with a role and workspaces, ready for their first sign-in |
 | PATCH/DELETE | `/api/v1/users/{id}` | Admins: change role, status or workspaces; remove from this app (their Supabase account stays). The last active admin can't be lost |
@@ -82,7 +85,7 @@ Admins open every workspace and manage users and workspaces; Management and admi
 | POST | `/api/v1/posts/fetch` | Recent LinkedIn (`harvestapi~linkedin-profile-posts`) and Instagram (`apify~instagram-scraper`) posts for up to 25 leads; `sources` limits it to `linkedin`, `instagram` or both; Instagram falls back to the company's account from Lead Intel |
 | GET | `/api/v1/pipeline/companies` | The company pipeline (`icpId`, `status`: found, qualified, not_fit, error) |
 | POST | `/api/v1/pipeline/find` | Find companies for an ICP in Lead Intel (qualified straight away), Apollo (`mixed_companies/search`, 1 credit a page) and/or Google Maps (Places API Text Search over a grid around each place, as Lead Intel does; $0.035 a request, capped by `googleMaps.maxSearches`; chains skipped); deduplicated by domain, Lead Intel id, Apollo id and Google place id |
-| POST | `/api/v1/pipeline/research` | Research up to 10 Apollo or Google Maps companies: website (own crawl, Jina fallback), Instagram profile (Apify), the ICP's rule, then a Claude Haiku score |
+| POST | `/api/v1/pipeline/research` | Research up to 10 Apollo or Google Maps companies (also takes the emails, phone and owner their site publishes, as Lead Intel did): website (own crawl, Jina fallback), Instagram profile (Apify), the ICP's rule, then a Claude Haiku score |
 | GET | `/api/v1/pipeline/companies/{id}/content` | What research read: each website page's full text (`eo_company_pages`) and the company's own Instagram posts (`eo_posts`) |
 | PATCH | `/api/v1/pipeline/companies/{id}` | Keep (`qualified`) or drop (`not_fit`) by hand; research won't undo it |
 | POST | `/api/v1/pipeline/stakeholders` | People at qualified companies: Apollo by domain, or LinkedIn (Apify) by name |

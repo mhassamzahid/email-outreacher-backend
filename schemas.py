@@ -255,6 +255,34 @@ class WorkspaceMembersIn(ApiModel):
     user_ids: list[UUID] = Field(default=[], max_length=500)
 
 
+# ---------- Do-not-contact list ----------
+
+ExclusionReason = Literal["current_client", "past_client", "do_not_contact", "competitor", "other"]
+
+
+class ExclusionIn(ApiModel):
+    key_type: Literal["domain", "email", "phone", "place_id", "name_location"]
+    value: str = Field(min_length=1, max_length=300)
+    reason: ExclusionReason = "do_not_contact"
+    business_name: str = Field(default="", max_length=200)
+    note: str = Field(default="", max_length=1000)
+
+
+class ExcludeCompanyIn(ApiModel):
+    reason: ExclusionReason = "do_not_contact"
+    note: str = Field(default="", max_length=1000)
+
+
+class ExclusionOut(ApiModel):
+    id: UUID
+    key_type: str
+    key_value: str
+    reason: str
+    business_name: str
+    note: str
+    created_at: datetime
+
+
 # ---------- Users ----------
 
 UserRole = Literal["sales", "management", "admin"]
@@ -474,6 +502,8 @@ class SourceFindResult(ApiModel):
     upgraded: int = 0
     total_available: int | None = None
     error: str | None = None
+    # On the do-not-contact list, so not added.
+    excluded: int = 0
     # Google Maps: requests made, what they cost, and anything worth knowing about the run.
     searches: int | None = None
     cost_usd: float | None = None

@@ -19,6 +19,7 @@ from uuid import UUID
 
 from models import Company
 from services.apify import ApifyClient, ApifyError, FetchedPost, InstagramProfile, instagram_handle
+from services.contacts import extract_contacts
 from services.icp_rules import Evidence, check
 from services.scoring import CompanyScorer, MoreReading, PromptSpec
 from services.website import AI_BUDGET_SECONDS, AI_MAX_PAGES, SiteRead, WebsiteReader, normalize_domain
@@ -201,6 +202,11 @@ async def research_companies(
                 "followers": ig.followers, "private": ig.private, "verified": ig.verified, "raw": ig.raw,
             },
         }  # fmt: skip
+        # What the site publishes for reaching them, as Lead Intel took it (services/contacts.py).
+        if site and site.reached:
+            contacts = extract_contacts(site.pages, site.mailtos, site.tels, site.owner_names, company.domain)
+            company.research = {**company.research, "contacts": None if contacts.empty else contacts.as_dict()}
+            company.phone = company.phone or contacts.phone
         if site and site.reached and site.pages:
             summary.pages[company.id] = (site.via or "own_crawl", site.pages)
         if ig and ig.posts:

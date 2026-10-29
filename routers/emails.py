@@ -4,7 +4,8 @@
             profile (the ICP's Hook Selection prompt) gives ranked hooks; the email is written from the
             top one (its Email Generation prompt); then the draft is scored against the rated examples
             (the workspace's Email Scoring prompt). Each prompt version sets how many posts it's given.
-            Replaces the lead's unsent draft. Up to 25 leads at a time.
+            Replaces the lead's unsent draft. Up to 25 leads at a time. Anyone on the do-not-contact
+            list, or at a company on it, is skipped.
   list      drafts, with the ranked hooks, the post the top hook came from, and the score.
   update    edit the subject or body, approve, skip, or put back to draft.
   feedback  rate a draft good or bad, with tags and a note. The ICP's latest ratings are shown to
@@ -18,10 +19,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from crud import PRODUCT_FIELDS, EmailRepo, ExampleRepo, FeedbackRepo, IcpProfileRepo, ProductRepo, PromptRepo, ProviderCallRepo, SettingsRepo
+from crud import (
+    PRODUCT_FIELDS, EmailRepo, ExampleRepo, ExclusionRepo, FeedbackRepo, IcpProfileRepo, ProductRepo, PromptRepo,
+    ProviderCallRepo, SettingsRepo, exclusion_note, person_keys,
+)  # fmt: skip
 from dependencies import (
     get_email_repo,
     get_example_repo,
+    get_exclusion_repo,
     get_feedback_repo,
     get_icp_profile_repo,
     get_lead_intel_repo,
@@ -33,6 +38,7 @@ from dependencies import (
     require_workspace_id,
 )
 from lead_intel import LeadIntelRepo
+from services.identity import identity_keys
 from models import Company, Email, Lead, Post, Stakeholder
 from schemas import (
     EmailLeadOut,
@@ -154,12 +160,14 @@ async def generate(
     products: ProductRepo = Depends(get_product_repo),
     library: ExampleRepo = Depends(get_example_repo),
     writer: EmailWriter | None = Depends(get_optional_writer),
+    exclusions: ExclusionRepo = Depends(get_exclusion_repo),
 ) -> GenerateResult:
     """Draft an email for each lead. Leads without an ICP are skipped."""
     if writer is None:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not set")
     ids = list(dict.fromkeys(body.lead_ids))
     leads = {lead.id: lead for lead in await emails.leads(workspace_id, ids)}
+    is_excluded = await exclusions.matcher()
     outcomes: dict[UUID, GenerateOutcome] = {}
     jobs: list[tuple[Lead, LeadContext, PromptVersionSpec, PromptVersionSpec, PromptVersionSpec | None]] = []
     # Email scoring isn't chosen per ICP: every draft is scored with the workspace's default.
@@ -180,6 +188,13 @@ async def generate(
             outcomes[lead_id] = GenerateOutcome(lead_id=lead_id, name=None, status="skipped", reason="Not in this workspace")
             continue
         company = await emails.company_for(workspace_id, lead)
+        keys = person_keys(lead.email, lead.domain)
+        if company:
+            keys += identity_keys(place_id=company.google_place_id, domain=company.domain, phone=company.phone,
+                                  name=company.name, city=company.city, state=company.state)  # fmt: skip
+        if hit := is_excluded(keys):
+            outcomes[lead_id] = GenerateOutcome(lead_id=lead_id, name=_name(lead), status="skipped", reason=exclusion_note(hit))
+            continue
         icp_id = lead.lead_intel_icp_id or (company.icp_id if company else None)
         if icp_id and icp_id not in icps:
             icps[icp_id] = await lead_intel.get_icp(icp_id)

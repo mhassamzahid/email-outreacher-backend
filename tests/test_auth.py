@@ -40,6 +40,11 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def test_small_clock_differences_are_allowed(jwks) -> None:
+    # Issued "2 seconds from now" by a clock slightly ahead of ours: still accepted.
+    assert run(verify(token(iat=int(time.time()) + 2), "jwks", ISSUER)).email == "ava@example.com"
+
+
 def test_valid_token(jwks) -> None:
     sub = uuid4()
     claims = run(verify(token(sub=str(sub)), "jwks", ISSUER))
@@ -49,7 +54,7 @@ def test_valid_token(jwks) -> None:
 @pytest.mark.parametrize(
     ("bad", "message"),
     [
-        (lambda: token(exp=int(time.time()) - 60), "expired"),
+        (lambda: token(exp=int(time.time()) - 120), "expired"),
         (lambda: token(OTHER_KEY), "isn't valid"),
         (lambda: token(aud="anon"), "isn't valid"),
         (lambda: token(iss="https://other.supabase.co/auth/v1"), "isn't valid"),

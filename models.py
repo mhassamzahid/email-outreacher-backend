@@ -121,6 +121,35 @@ class WorkspaceMember(Base):
     created_at: Mapped[datetime] = _created()
 
 
+EXCLUSION_KEY_TYPES = ("domain", "email", "phone", "place_id", "name_location")
+EXCLUSION_REASONS = ("current_client", "past_client", "do_not_contact", "competitor", "other")
+
+
+class Exclusion(Base):
+    """Do not contact: a business or person never found, made a lead, or emailed, in any workspace.
+
+    Ported from Lead Intel's exclusions. Matched by the same identity keys (services/identity.py): a
+    company by its place id, domain, phone or name and city; a person by their email or its domain.
+    """
+
+    __tablename__ = "eo_exclusions"
+    __table_args__ = (
+        CheckConstraint(_in("key_type", EXCLUSION_KEY_TYPES), name="key_type"),
+        CheckConstraint(_in("reason", EXCLUSION_REASONS), name="reason"),
+        Index("eo_exclusions_key_key", "key_type", "key_value", unique=True),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    key_type: Mapped[str] = mapped_column(Text)
+    key_value: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text, server_default="do_not_contact")
+    # For people to recognise the entry; never used for matching.
+    business_name: Mapped[str] = mapped_column(Text, server_default="")
+    note: Mapped[str] = mapped_column(Text, server_default="")
+    added_by: Mapped[UUID | None] = _user_ref()
+    created_at: Mapped[datetime] = _created()
+
+
 class WorkspaceCompany(Base):
     """A Lead Intel business pulled into a workspace. Only the link is stored; the company stays in Lead Intel."""
 

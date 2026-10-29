@@ -4,8 +4,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from crud import LeadRepo
-from dependencies import get_lead_intel_repo, get_lead_repo, require_workspace_id
+from crud import ExclusionRepo, LeadRepo, exclusion_note, person_keys
+from dependencies import get_exclusion_repo, get_lead_intel_repo, get_lead_repo, require_workspace_id
 from lead_intel import LeadIntelRepo
 from schemas import ColumnMapping, ImportResult, LeadIdsIn, LeadIn, LeadMoveIn, LeadOut, LeadsChanged, Page, RowOutcome
 from services.leads import (
@@ -90,12 +90,15 @@ async def add_lead(
     workspace_id: UUID = Depends(require_workspace_id),
     leads: LeadRepo = Depends(get_lead_repo),
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    exclusions: ExclusionRepo = Depends(get_exclusion_repo),
 ) -> LeadOut:
-    """Add one lead by hand. 409 if the workspace already has them."""
+    """Add one lead by hand. 409 if the workspace already has them or they're on the do-not-contact list."""
     await _check_targets(workspace_id, body.icp_id, leads, lead_intel)
     lead = clean_lead(body.model_dump(), body.extra)
     if problem := validate(lead):
         raise HTTPException(status_code=422, detail=problem)
+    if hit := await exclusions.match(person_keys(lead.email, lead.domain)):
+        raise HTTPException(status_code=409, detail=exclusion_note(hit))
     if reason := duplicate_reason(lead, await leads.find_existing(workspace_id, [lead])):
         raise HTTPException(status_code=409, detail=f"Already a lead in this workspace ({reason})")
     [lead_id] = await leads.insert_many(workspace_id, body.icp_id, "manual", [lead])
@@ -112,11 +115,12 @@ async def import_csv(
     dry_run: bool = Query(default=False, alias="dryRun"),
     leads: LeadRepo = Depends(get_lead_repo),
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    exclusions: ExclusionRepo = Depends(get_exclusion_repo),
 ) -> ImportResult:
     """Import leads from a CSV sent as the request body (Content-Type: text/csv).
 
     Every row gets an outcome: imported, duplicate (in the file or already in the workspace) or
-    invalid. With dryRun=true nothing is saved, so the result can be shown as a preview first.
+    invalid (including anyone on the do-not-contact list). With dryRun=true nothing is saved, so the result can be shown as a preview first.
     """
     await _check_targets(workspace_id, icp_id, leads, lead_intel)
     data = await request.body()
@@ -129,6 +133,7 @@ async def import_csv(
 
     mapping, candidates = rows_to_leads(headers, rows)
     existing = await leads.find_existing(workspace_id, candidates)
+    is_excluded = await exclusions.matcher()
     seen = Existing()
     outcomes: list[RowOutcome] = []
     to_insert = []
@@ -139,6 +144,9 @@ async def import_csv(
         if problem := validate(lead):
             counts["invalid"] += 1
             outcomes.append(RowOutcome(row=row, outcome="invalid", reason=problem))
+        elif hit := is_excluded(person_keys(lead.email, lead.domain)):
+            counts["invalid"] += 1
+            outcomes.append(RowOutcome(row=row, outcome="invalid", reason=exclusion_note(hit)))
         elif reason := duplicate_reason(lead, existing):
             counts["existing"] += 1
             outcomes.append(RowOutcome(row=row, outcome="duplicate", reason=f"Already in this workspace ({reason})"))

@@ -132,7 +132,7 @@ def test_find_from_both_sources_dedupes_by_domain(client, env) -> None:
     result = find(client).json()
     assert result["leadIntel"] == {
         "found": 1, "added": 1, "duplicates": 0, "upgraded": 0, "totalAvailable": 1, "error": None,
-        "searches": None, "costUsd": None, "notes": [],
+        "searches": None, "costUsd": None, "notes": [], "excluded": 0,
     }  # fmt: skip
     # Apollo's Glow Med Spa has the same domain as the Lead Intel company: a duplicate, not a second row.
     assert (result["apollo"]["found"], result["apollo"]["added"], result["apollo"]["duplicates"]) == (2, 1, 1)

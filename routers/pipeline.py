@@ -16,9 +16,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import get_settings
-from crud import PRODUCT_FIELDS, CompanyRepo, IcpProfileRepo, PostRepo, ProductRepo, PromptRepo, ProviderCallRepo, SettingsRepo, StakeholderRepo
+from crud import PRODUCT_FIELDS, CompanyRepo, ExclusionRepo, IcpProfileRepo, PostRepo, ProductRepo, PromptRepo, ProviderCallRepo, SettingsRepo, StakeholderRepo
 from dependencies import (
     get_company_repo,
+    get_exclusion_repo,
     get_icp_profile_repo,
     get_lead_intel_repo,
     get_optional_apify,
@@ -54,6 +55,7 @@ from services.apify import EMPLOYEES_ACTOR, INSTAGRAM_PROFILE_ACTOR, ApifyClient
 from services.apollo import SENIORITIES, ApolloClient, ApolloError
 from services.claude import cost_usd
 from services.google_places import CENTER_COST_USD, SEARCH_COST_USD, PlacesClient, PlacesError, shared_domain
+from services.identity import identity_keys
 from services.research import research_companies
 from services.scoring import CompanyScorer, PromptSpec
 from services.website import WebsiteReader, normalize_domain
@@ -95,11 +97,14 @@ async def find_companies(
     calls: ProviderCallRepo = Depends(get_provider_call_repo),
     apollo: ApolloClient | None = Depends(get_optional_apollo),
     places: PlacesClient | None = Depends(get_optional_places),
+    exclusions: ExclusionRepo = Depends(get_exclusion_repo),
 ) -> FindCompaniesResult:
-    """Find companies for an ICP in Lead Intel, Apollo and/or Google Maps, and add the new ones to the pipeline."""
+    """Find companies for an ICP in Lead Intel, Apollo and/or Google Maps, and add the new ones to the
+    pipeline. Anything on the do-not-contact list is left out."""
     await _workspace(companies, workspace_id)
     icp = await _icp(lead_intel, body.icp_id)
     li_result = apollo_result = maps_result = None
+    is_excluded = await exclusions.matcher()
 
     if "lead_intel" in body.sources:
         rows: list[dict[str, Any]] = []
@@ -117,8 +122,11 @@ async def find_companies(
             }
             for r in rows
         ]  # fmt: skip
-        added, upgraded, had = await companies.add_lead_intel(workspace_id, body.icp_id, found)
-        li_result = SourceFindResult(found=len(found), added=added, upgraded=upgraded, duplicates=had, total_available=len(rows))
+        allowed = [c for c in found if not is_excluded(identity_keys(domain=c["domain"], name=c["name"], city=c["city"], state=c["state"]))]
+        added, upgraded, had = await companies.add_lead_intel(workspace_id, body.icp_id, allowed)
+        li_result = SourceFindResult(
+            found=len(found), added=added, upgraded=upgraded, duplicates=had, total_available=len(rows), excluded=len(found) - len(allowed)
+        )
 
     if "apollo" in body.sources:
         if apollo is None:
@@ -141,18 +149,21 @@ async def find_companies(
                 await calls.record(workspace_id, "apollo", "mixed_companies/search", "succeeded", credits=1, action="Find companies")
                 for org in orgs:
                     org.domain = normalize_domain(org.domain or org.website_url)
-                added, dupes = await companies.add_apollo(workspace_id, body.icp_id, orgs)
-                apollo_result = SourceFindResult(found=len(orgs), added=added, duplicates=dupes, total_available=total)
+                allowed = [o for o in orgs if not is_excluded(identity_keys(domain=o.domain))]
+                added, dupes = await companies.add_apollo(workspace_id, body.icp_id, allowed)
+                apollo_result = SourceFindResult(
+                    found=len(orgs), added=added, duplicates=dupes, total_available=total, excluded=len(orgs) - len(allowed)
+                )
 
     if "google_maps" in body.sources:
-        maps_result = await _find_on_google_maps(workspace_id, body, icp, places, companies, calls)
+        maps_result = await _find_on_google_maps(workspace_id, body, icp, places, companies, calls, is_excluded)
 
     return FindCompaniesResult(lead_intel=li_result, apollo=apollo_result, google_maps=maps_result)
 
 
 async def _find_on_google_maps(
     workspace_id: UUID, body: FindCompaniesIn, icp: dict[str, Any], places: PlacesClient | None,
-    companies: CompanyRepo, calls: ProviderCallRepo,
+    companies: CompanyRepo, calls: ProviderCallRepo, is_excluded=lambda keys: None,
 ) -> SourceFindResult:  # fmt: skip
     """Each search term around each place, sharing one request budget. Chains are skipped; a listing
     whose website is a platform profile (Booksy, Facebook...) is kept without a domain."""
@@ -205,7 +216,7 @@ async def _find_on_google_maps(
             credits=searches + lookups, cost_usd=cost, action="Find companies",
         )  # fmt: skip
 
-    chains = 0
+    chains = excluded = 0
     to_add = []
     for place in found.values():
         domain = normalize_domain(place.website_url)
@@ -213,12 +224,17 @@ async def _find_on_google_maps(
         if kind == "chain":
             chains += 1
             continue
+        keys = identity_keys(place_id=place.place_id, domain=domain, phone=place.phone, name=place.name, city=place.city, state=place.state)
+        if is_excluded(keys):
+            excluded += 1
+            continue
         to_add.append((place, None if kind == "platform" else domain))
     if chains:
         notes.append(f"{chains} national chain location{'s' if chains != 1 else ''} skipped.")
     added, dupes = await companies.add_google_maps(workspace_id, body.icp_id, to_add)
     return SourceFindResult(
         found=len(found), added=added, duplicates=dupes, error=fatal, searches=searches + lookups, cost_usd=cost, notes=notes,
+        excluded=excluded,
     )
 
 

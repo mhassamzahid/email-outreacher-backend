@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from dependencies import get_current_user, get_icp_profile_repo, get_lead_intel_repo, get_workspace_company_repo
+from dependencies import get_current_user, get_exclusion_repo, get_icp_profile_repo, get_lead_intel_repo, get_workspace_company_repo
 from main import app
 from services.auth import CurrentUser
 
@@ -128,17 +128,56 @@ def workspace_companies() -> FakeWorkspaceCompanyRepo:
     return FakeWorkspaceCompanyRepo()
 
 
+class FakeExclusions:
+    """The do-not-contact list, in memory."""
+
+    def __init__(self) -> None:
+        self.rows: list[SimpleNamespace] = []
+
+    async def list(self):
+        return list(self.rows)
+
+    async def add(self, entries, added_by):
+        added = []
+        for e in entries:
+            if any((r.key_type, r.key_value) == (e["key_type"], e["key_value"]) for r in self.rows):
+                continue
+            row = SimpleNamespace(id=uuid4(), added_by=added_by, created_at=NOW, **{"reason": "do_not_contact", "business_name": "", "note": "", **e})
+            self.rows.append(row)
+            added.append(row)
+        return added
+
+    async def get(self, exclusion_id):
+        return next((r for r in self.rows if r.id == exclusion_id), None)
+
+    async def delete(self, row):
+        self.rows.remove(row)
+
+    async def matcher(self):
+        rows = {(r.key_type, r.key_value): r for r in self.rows}
+        return lambda keys: next((rows[k] for k in keys if k in rows), None)
+
+    async def match(self, keys):
+        return (await self.matcher())(keys)
+
+
+@pytest.fixture
+def exclusions() -> FakeExclusions:
+    return FakeExclusions()
+
+
 @pytest.fixture
 def profiles() -> FakeIcpProfileRepo:
     return FakeIcpProfileRepo()
 
 
 @pytest.fixture
-def client(profiles: FakeIcpProfileRepo, workspace_companies: FakeWorkspaceCompanyRepo):
+def client(profiles: FakeIcpProfileRepo, workspace_companies: FakeWorkspaceCompanyRepo, exclusions: FakeExclusions):
     app.dependency_overrides[get_lead_intel_repo] = FakeLeadIntelRepo
     app.dependency_overrides[get_workspace_company_repo] = lambda: workspace_companies
     app.dependency_overrides[get_icp_profile_repo] = lambda: profiles
     # Signed in as an admin, who opens every workspace. tests/test_auth.py covers the other roles.
     app.dependency_overrides[get_current_user] = lambda: ADMIN
+    app.dependency_overrides[get_exclusion_repo] = lambda: exclusions
     yield TestClient(app)
     app.dependency_overrides.clear()
