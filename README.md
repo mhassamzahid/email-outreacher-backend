@@ -1,6 +1,6 @@
-# Outreacher API
+# Coldbrew API
 
-FastAPI backend for the outreach dashboard (`../email-outreacher-frontend`). Deployed on Railway.
+FastAPI backend for Coldbrew, the outreach dashboard (`../email-outreacher-frontend`). Deployed on Railway.
 
 ## Run locally
 

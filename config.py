@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    app_name: str = "Outreacher API"
+    app_name: str = "Coldbrew API"
     environment: str = "development"
 
     # Comma-separated origins allowed to call the API (the Next.js frontend).

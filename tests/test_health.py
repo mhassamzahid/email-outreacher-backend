@@ -16,7 +16,7 @@ def test_api_health() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["service"] == "Outreacher API"
+    assert body["service"] == "Coldbrew API"
 
 
 def test_database_routes_say_503_when_not_configured(monkeypatch) -> None:
