@@ -6,3 +6,4 @@ asyncpg==0.32.0
 alembic==1.20.1
 httpx==0.28.1
 anthropic==2.3.0
+pyjwt[crypto]==2.15.1

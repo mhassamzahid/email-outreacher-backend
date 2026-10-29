@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
     Company, CompanyPage, Email, EmailFeedback, ExampleEmail, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
-    Workspace, WorkspaceCompany,
+    User, Workspace, WorkspaceCompany, WorkspaceMember,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
 from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
@@ -378,6 +378,89 @@ class WorkspaceRepo:
     async def delete(self, workspace: Workspace) -> None:
         await self.session.delete(workspace)
         await self.session.commit()
+
+
+class UserRepo:
+    """People who sign in, with their role and workspaces. `outreach.eo_users` and
+    `eo_workspace_members` only: Supabase's own auth.users is never written from here."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def workspace_ids(self, user_id: UUID) -> list[UUID]:
+        query = select(WorkspaceMember.workspace_id).where(WorkspaceMember.user_id == user_id)
+        return list(await self.session.scalars(query))
+
+    async def members(self) -> dict[UUID, list[UUID]]:
+        """Each user's workspaces, for the user list."""
+        out: dict[UUID, list[UUID]] = {}
+        for user_id, workspace_id in await self.session.execute(select(WorkspaceMember.user_id, WorkspaceMember.workspace_id)):
+            out.setdefault(user_id, []).append(workspace_id)
+        return out
+
+    async def list(self) -> list[User]:
+        return list(await self.session.scalars(select(User).order_by(User.created_at, User.email)))
+
+    async def get(self, user_id: UUID) -> User | None:
+        return await self.session.get(User, user_id)
+
+    async def by_email(self, email: str) -> User | None:
+        return await self.session.scalar(select(User).where(User.email == email.strip().lower()))
+
+    async def for_sign_in(self, auth_user_id: UUID, email: str) -> User:
+        """The user for a Supabase account: linking a row added by email on first sign-in, or adding a
+        new one as Sales with no workspaces. The last-active time moves at most every 5 minutes."""
+        user = await self.session.scalar(select(User).where(User.auth_user_id == auth_user_id))
+        if user is None:
+            user = await self.by_email(email)
+            if user is not None and user.auth_user_id is None:
+                user.auth_user_id = auth_user_id
+            elif user is None:
+                user = User(auth_user_id=auth_user_id, email=email, name=email.split("@")[0], role="sales", status="active")
+                self.session.add(user)
+        now = datetime.now(UTC)
+        if user.status == "invited":
+            user.status = "active"
+        if user.last_active_at is None or (now - user.last_active_at).total_seconds() > 300:
+            user.last_active_at = now
+        if self.session.dirty or self.session.new:
+            await self.session.commit()
+            await self.session.refresh(user)
+        return user
+
+    async def create(self, name: str, email: str, role: str, workspace_ids: list[UUID]) -> User:
+        user = User(name=name, email=email.strip().lower(), role=role, status="invited")
+        self.session.add(user)
+        await self.session.flush()
+        await self._set_workspaces(user.id, workspace_ids)
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
+
+    async def update(self, user: User, values: dict[str, Any], workspace_ids: list[UUID] | None) -> User:
+        for key, value in values.items():
+            setattr(user, key, value)
+        if workspace_ids is not None:
+            await self._set_workspaces(user.id, workspace_ids)
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
+
+    async def delete(self, user: User) -> None:
+        await self.session.delete(user)
+        await self.session.commit()
+
+    async def set_workspace_members(self, workspace_id: UUID, user_ids: list[UUID]) -> None:
+        """Exactly these users are members of the workspace (admins open every workspace anyway)."""
+        await self.session.execute(delete(WorkspaceMember).where(WorkspaceMember.workspace_id == workspace_id))
+        for user_id in dict.fromkeys(user_ids):
+            self.session.add(WorkspaceMember(workspace_id=workspace_id, user_id=user_id))
+        await self.session.commit()
+
+    async def _set_workspaces(self, user_id: UUID, workspace_ids: list[UUID]) -> None:
+        await self.session.execute(delete(WorkspaceMember).where(WorkspaceMember.user_id == user_id))
+        for workspace_id in dict.fromkeys(workspace_ids):
+            self.session.add(WorkspaceMember(workspace_id=workspace_id, user_id=user_id))
 
 
 class StakeholderRepo:

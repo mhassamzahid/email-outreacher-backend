@@ -1,29 +1,37 @@
 """Entry point. Run with: uvicorn main:app --reload"""
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
-from routers import companies, emails, examples, health, icps, improve, leads, pipeline, posts, products, prompts, settings, stakeholders, usage, workspaces
+from dependencies import get_current_user
+from routers import (
+    companies, emails, examples, health, icps, improve, leads, pipeline, posts, products, prompts, settings, stakeholders,
+    usage, users, workspaces,
+)  # fmt: skip
 
 
-# Every feature router is included here, under /api/v1.
+# Every feature router is included here, under /api/v1. Only health is open: the rest need a signed-in
+# Supabase session (see dependencies.get_current_user).
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
-api_router.include_router(icps.router)
-api_router.include_router(companies.router)
-api_router.include_router(leads.router)
-api_router.include_router(workspaces.router)
-api_router.include_router(stakeholders.router)
-api_router.include_router(posts.router)
-api_router.include_router(pipeline.router)
-api_router.include_router(usage.router)
-api_router.include_router(prompts.router)
-api_router.include_router(emails.router)
-api_router.include_router(improve.router)
-api_router.include_router(settings.router)
-api_router.include_router(products.router)
-api_router.include_router(examples.router)
+protected = APIRouter(dependencies=[Depends(get_current_user)])
+protected.include_router(users.router)
+protected.include_router(icps.router)
+protected.include_router(companies.router)
+protected.include_router(leads.router)
+protected.include_router(workspaces.router)
+protected.include_router(stakeholders.router)
+protected.include_router(posts.router)
+protected.include_router(pipeline.router)
+protected.include_router(usage.router)
+protected.include_router(prompts.router)
+protected.include_router(emails.router)
+protected.include_router(improve.router)
+protected.include_router(settings.router)
+protected.include_router(products.router)
+protected.include_router(examples.router)
+api_router.include_router(protected)
 
 
 def create_app() -> FastAPI:

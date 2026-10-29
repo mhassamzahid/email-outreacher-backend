@@ -11,6 +11,7 @@ from dependencies import (
     get_product_repo,
     get_prompt_repo,
     get_workspace_id,
+    require_manager,
     require_workspace_id,
 )
 from lead_intel import LeadIntelRepo
@@ -66,6 +67,7 @@ def _validated(body: IcpCreateIn) -> dict:
 async def create_icp(
     body: IcpCreateIn,
     writer: LeadIntelIcpWriter = Depends(get_lead_intel_icp_writer),
+    _: object = Depends(require_manager),
 ) -> Icp:
     """Add a new ICP to Lead Intel's icps table, shared by both projects. Lead Intel assigns businesses
     to it on its next match."""
@@ -87,6 +89,7 @@ async def update_icp(
     writer: LeadIntelIcpWriter = Depends(get_lead_intel_icp_writer),
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
     profiles: IcpProfileRepo = Depends(get_icp_profile_repo),
+    _: object = Depends(require_manager),
 ) -> Icp:
     """Edit an ICP's own fields in Lead Intel's icps table (shared: Lead Intel sees the change too).
     Only that ICP's row is updated; its businesses are re-matched by Lead Intel on its next run."""

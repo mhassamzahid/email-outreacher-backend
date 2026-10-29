@@ -5,13 +5,15 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from dependencies import get_icp_profile_repo, get_lead_intel_repo, get_workspace_company_repo
+from dependencies import get_current_user, get_icp_profile_repo, get_lead_intel_repo, get_workspace_company_repo
 from main import app
+from services.auth import CurrentUser
 
 NOW = datetime(2026, 10, 27, tzinfo=UTC)
 ICP_ID = uuid4()
 WORKSPACE_ID = uuid4()
 COMPANY_ID = uuid4()
+ADMIN = CurrentUser(uuid4(), "admin@example.com", "Admin", "admin")
 
 ICP_ROW = {
     "id": ICP_ID,
@@ -136,5 +138,7 @@ def client(profiles: FakeIcpProfileRepo, workspace_companies: FakeWorkspaceCompa
     app.dependency_overrides[get_lead_intel_repo] = FakeLeadIntelRepo
     app.dependency_overrides[get_workspace_company_repo] = lambda: workspace_companies
     app.dependency_overrides[get_icp_profile_repo] = lambda: profiles
+    # Signed in as an admin, who opens every workspace. tests/test_auth.py covers the other roles.
+    app.dependency_overrides[get_current_user] = lambda: ADMIN
     yield TestClient(app)
     app.dependency_overrides.clear()

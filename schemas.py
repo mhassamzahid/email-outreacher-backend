@@ -251,6 +251,41 @@ class WorkspaceOut(ApiModel):
     created_at: datetime
 
 
+class WorkspaceMembersIn(ApiModel):
+    user_ids: list[UUID] = Field(default=[], max_length=500)
+
+
+# ---------- Users ----------
+
+UserRole = Literal["sales", "management", "admin"]
+
+
+class UserIn(ApiModel):
+    name: str = Field(default="", max_length=100)
+    email: str = Field(pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$", max_length=254)
+    role: UserRole = "sales"
+    workspace_ids: list[UUID] = Field(default=[], max_length=100)
+
+
+class UserUpdate(ApiModel):
+    name: str | None = Field(default=None, max_length=100)
+    role: UserRole | None = None
+    status: Literal["active", "deactivated"] | None = None
+    workspace_ids: list[UUID] = Field(default=[], max_length=100)
+
+
+class UserOut(ApiModel):
+    id: UUID
+    name: str
+    email: str
+    role: str
+    # invited: added here, hasn't signed in yet.
+    status: str
+    workspace_ids: list[UUID]
+    last_active_at: datetime | None
+    created_at: datetime
+
+
 # ---------- Stakeholders (Apollo) ----------
 
 

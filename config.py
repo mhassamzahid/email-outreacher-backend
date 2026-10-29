@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     database_url: str | None = None
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
+    # Where Supabase publishes the public keys its sign-in tokens are signed with. Defaults to the
+    # project's standard address.
+    supabase_jwks_url: str | None = None
 
     # Lead Intel user that new ICPs are recorded as created by (Lead Intel requires one). Until this
     # app has sign-in, every ICP added here is attributed to this account.
@@ -48,6 +51,14 @@ class Settings(BaseSettings):
     jina_rpm: int | None = None
     cheapsequencer_api_key: str | None = None
     cheapsequencer_webhook_secret: str | None = None
+
+    @property
+    def auth_issuer(self) -> str:
+        return f"{(self.supabase_url or '').rstrip('/')}/auth/v1"
+
+    @property
+    def jwks_url(self) -> str:
+        return self.supabase_jwks_url or f"{self.auth_issuer}/.well-known/jwks.json"
 
     @property
     def cors_origin_list(self) -> list[str]:

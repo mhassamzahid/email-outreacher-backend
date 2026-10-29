@@ -36,11 +36,27 @@ alembic upgrade head         # create the outreach schema and tables
 Check the connection and that Lead Intel still has every column we read:
 `GET /api/v1/health/db` (`missingColumns` should be empty).
 
+## Sign-in
+
+Supabase Auth, email and password. There's no sign-up: accounts are made, and passwords reset, in the
+Supabase dashboard (Authentication > Users). The app also has "Forgot password?", which emails a link
+to `/reset-password`; add the frontend's `/reset-password` address to Supabase's Redirect URLs.
+
+Every route except health needs `Authorization: Bearer <Supabase access token>`, checked against the
+project's public keys (`SUPABASE_JWKS_URL`, or the standard address under `SUPABASE_URL`). Supabase Auth
+is shared with Lead Intel, so any account there can sign in; what it can do here comes from
+`eo_users`: a first sign-in is added as Sales with no workspaces until an admin gives them some.
+Admins open every workspace and manage users and workspaces; Management and admins can change ICPs.
+
 ## Endpoints (v1)
 
 | Method | Path | |
 |---|---|---|
-| GET | `/api/v1/workspaces` | All workspaces |
+| GET | `/api/v1/me` | The signed-in person: role, status and workspaces |
+| GET/POST | `/api/v1/users` | Admins: everyone; add someone by email with a role and workspaces, ready for their first sign-in |
+| PATCH/DELETE | `/api/v1/users/{id}` | Admins: change role, status or workspaces; remove from this app (their Supabase account stays). The last active admin can't be lost |
+| GET | `/api/v1/workspaces` | The workspaces the signed-in person can open |
+| PUT | `/api/v1/workspaces/{id}/members` | Admins: exactly who can open it |
 | POST | `/api/v1/workspaces` | Create one (`{name, description}`); 409 if the name is taken (ignoring case) |
 | PATCH | `/api/v1/workspaces/{id}` | Rename or change the description |
 | DELETE | `/api/v1/workspaces/{id}` | Delete it and everything it owns in our `eo_` tables; refuses the last one |

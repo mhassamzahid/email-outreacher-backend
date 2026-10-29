@@ -20,6 +20,7 @@ from crud import (
     SettingsRepo,
     ProviderCallRepo,
     StakeholderRepo,
+    UserRepo,
     WorkspaceCompanyRepo,
     WorkspaceRepo,
 )
@@ -28,6 +29,7 @@ from lead_intel import LeadIntelRepo
 from lead_intel_writes import LeadIntelIcpWriter
 from services.apify import ApifyClient
 from services.apollo import ApolloClient
+from services.auth import AuthError, CurrentUser, verify
 from services.generation import EmailWriter
 from services.google_places import PlacesClient
 from services.jina import JinaClient
@@ -39,8 +41,49 @@ def get_lead_intel_repo(conn: AsyncConnection = Depends(get_readonly_conn)) -> L
     return LeadIntelRepo(conn)
 
 
-def get_workspace_id(x_workspace_id: UUID | None = Header(default=None)) -> UUID | None:
-    """The workspace the request is for. Until sign-in exists, the frontend sends it as a header."""
+def get_user_repo(session: AsyncSession = Depends(get_session)) -> UserRepo:
+    return UserRepo(session)
+
+
+async def get_current_user(
+    authorization: str | None = Header(default=None), users: UserRepo = Depends(get_user_repo)
+) -> CurrentUser:
+    """The signed-in person, from the Supabase access token in `Authorization: Bearer`. Every API
+    route except health depends on this."""
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="Sign in to continue.")
+    settings = get_settings()
+    try:
+        claims = await verify(token, settings.jwks_url, settings.auth_issuer)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=exc.message) from exc
+    user = await users.for_sign_in(claims.auth_user_id, claims.email)
+    if user.status == "deactivated":
+        raise HTTPException(status_code=403, detail="Your account is deactivated. Ask an admin to turn it back on.")
+    return CurrentUser(user.id, user.email, user.name, user.role, await users.workspace_ids(user.id))
+
+
+def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can do that.")
+    return user
+
+
+def require_manager(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Admin or Management: for changes shared beyond one workspace, like Lead Intel's ICPs."""
+    if user.role not in ("admin", "management"):
+        raise HTTPException(status_code=403, detail="Only Management and admins can change ICPs.")
+    return user
+
+
+def get_workspace_id(
+    x_workspace_id: UUID | None = Header(default=None), user: CurrentUser = Depends(get_current_user)
+) -> UUID | None:
+    """The workspace the request is for, sent by the frontend as a header. Refused when the signed-in
+    person can't open it; admins open every workspace."""
+    if x_workspace_id is not None and not user.can_open(x_workspace_id):
+        raise HTTPException(status_code=403, detail="You don't have access to this workspace. Ask an admin to add you.")
     return x_workspace_id
 
 
