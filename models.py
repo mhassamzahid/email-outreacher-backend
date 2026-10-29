@@ -139,15 +139,15 @@ COMPANY_STATUSES = ("found", "qualified", "not_fit", "error")
 class Company(Base):
     """A company in a workspace's pipeline for one ICP: found, researched, then qualified or not.
 
-    Found in Lead Intel (already verified, so qualified straight away) or in Apollo (researched:
-    website and Instagram read, the ICP's rule checked, scored by Claude). Deduplicated per
-    workspace by Lead Intel id, Apollo id, and website domain; a company found in both is the
-    Lead Intel one.
+    Found in Lead Intel (already verified, so qualified straight away), or in Apollo or on Google
+    Maps (researched: website and Instagram read, the ICP's rule checked, scored by Claude).
+    Deduplicated per workspace by Lead Intel id, Apollo id, Google place id, and website domain; a
+    company found in Lead Intel too is the Lead Intel one.
     """
 
     __tablename__ = "eo_companies"
     __table_args__ = (
-        CheckConstraint(_in("source", ("lead_intel", "apollo")), name="source"),
+        CheckConstraint(_in("source", ("lead_intel", "apollo", "google_maps")), name="source"),
         CheckConstraint(_in("status", COMPANY_STATUSES), name="status"),
         CheckConstraint("score is null or score between 0 and 100", name="score"),
         Index("eo_companies_workspace_domain_key", "workspace_id", "domain", unique=True,
@@ -156,6 +156,8 @@ class Company(Base):
               postgresql_where=text("lead_intel_business_id is not null")),
         Index("eo_companies_workspace_apollo_key", "workspace_id", "apollo_org_id", unique=True,
               postgresql_where=text("apollo_org_id is not null")),
+        Index("eo_companies_workspace_place_key", "workspace_id", "google_place_id", unique=True,
+              postgresql_where=text("google_place_id is not null")),
         Index("eo_companies_workspace_icp_status_idx", "workspace_id", "icp_id", "status"),
     )  # fmt: skip
 
@@ -166,6 +168,8 @@ class Company(Base):
     source: Mapped[str] = mapped_column(Text)
     lead_intel_business_id: Mapped[UUID | None] = mapped_column(default=None)
     apollo_org_id: Mapped[str | None] = mapped_column(Text, default=None)
+    # Google's place id, for companies found on Google Maps.
+    google_place_id: Mapped[str | None] = mapped_column(Text, default=None)
 
     name: Mapped[str] = mapped_column(Text)
     # Lower-case, no www: the dedupe key across sources.
@@ -177,6 +181,7 @@ class Company(Base):
     instagram_url: Mapped[str | None] = mapped_column(Text, default=None)
     city: Mapped[str | None] = mapped_column(Text, default=None)
     state: Mapped[str | None] = mapped_column(Text, default=None)
+    phone: Mapped[str | None] = mapped_column(Text, default=None)
 
     status: Mapped[str] = mapped_column(Text, server_default="found")
     # Why it qualified or didn't, in one sentence.

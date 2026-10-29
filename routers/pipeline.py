@@ -1,8 +1,9 @@
 """The company pipeline for an ICP: find companies, research and score them, find their stakeholders.
 
-  find        Lead Intel companies matched to the ICP (already verified: qualified straight away)
-              and Apollo companies matching its search terms, places and size. Deduplicated.
-  research    Apollo companies: website + Instagram read, ICP rule checked, Claude score.
+  find        Lead Intel companies matched to the ICP (already verified: qualified straight away),
+              Apollo companies matching its search terms, places and size, and Google Maps
+              businesses for its search terms around its places. Deduplicated.
+  research    Apollo and Google Maps companies: website + Instagram read, ICP rule checked, Claude score.
   status      keep or drop a company by hand, whatever the research said.
   stakeholders  people at qualified companies, through Apollo or LinkedIn (Apify).
 
@@ -22,6 +23,7 @@ from dependencies import (
     get_lead_intel_repo,
     get_optional_apify,
     get_optional_apollo,
+    get_optional_places,
     get_optional_scorer,
     get_post_repo,
     get_product_repo,
@@ -51,6 +53,7 @@ from schemas import (
 from services.apify import EMPLOYEES_ACTOR, INSTAGRAM_PROFILE_ACTOR, ApifyClient, ApifyError
 from services.apollo import SENIORITIES, ApolloClient, ApolloError
 from services.claude import cost_usd
+from services.google_places import CENTER_COST_USD, SEARCH_COST_USD, PlacesClient, PlacesError, shared_domain
 from services.research import research_companies
 from services.scoring import CompanyScorer, PromptSpec
 from services.website import WebsiteReader, normalize_domain
@@ -91,11 +94,12 @@ async def find_companies(
     companies: CompanyRepo = Depends(get_company_repo),
     calls: ProviderCallRepo = Depends(get_provider_call_repo),
     apollo: ApolloClient | None = Depends(get_optional_apollo),
+    places: PlacesClient | None = Depends(get_optional_places),
 ) -> FindCompaniesResult:
-    """Find companies for an ICP in Lead Intel and/or Apollo, and add the new ones to the pipeline."""
+    """Find companies for an ICP in Lead Intel, Apollo and/or Google Maps, and add the new ones to the pipeline."""
     await _workspace(companies, workspace_id)
     icp = await _icp(lead_intel, body.icp_id)
-    li_result = apollo_result = None
+    li_result = apollo_result = maps_result = None
 
     if "lead_intel" in body.sources:
         rows: list[dict[str, Any]] = []
@@ -140,7 +144,82 @@ async def find_companies(
                 added, dupes = await companies.add_apollo(workspace_id, body.icp_id, orgs)
                 apollo_result = SourceFindResult(found=len(orgs), added=added, duplicates=dupes, total_available=total)
 
-    return FindCompaniesResult(lead_intel=li_result, apollo=apollo_result)
+    if "google_maps" in body.sources:
+        maps_result = await _find_on_google_maps(workspace_id, body, icp, places, companies, calls)
+
+    return FindCompaniesResult(lead_intel=li_result, apollo=apollo_result, google_maps=maps_result)
+
+
+async def _find_on_google_maps(
+    workspace_id: UUID, body: FindCompaniesIn, icp: dict[str, Any], places: PlacesClient | None,
+    companies: CompanyRepo, calls: ProviderCallRepo,
+) -> SourceFindResult:  # fmt: skip
+    """Each search term around each place, sharing one request budget. Chains are skipped; a listing
+    whose website is a platform profile (Booksy, Facebook...) is kept without a domain."""
+    if places is None:
+        return SourceFindResult(error="GOOGLE_PLACES_API_KEY is not set")
+    gm = body.google_maps
+    terms = [t.strip() for t in gm.search_terms if t.strip()] or (icp.get("search_terms") or icp.get("any_of") or [])
+    locations = [p.strip() for p in gm.locations if p.strip()] or (icp.get("places") or [])
+    if not terms:
+        return SourceFindResult(error="Add a search term, e.g. \"screen printing\". This ICP has none.")
+    if not locations:
+        return SourceFindResult(error="Add a city, state or postcode. Google Maps searches around a place.")
+
+    found: dict[str, Any] = {}
+    searches = lookups = capped = 0
+    notes: list[str] = []
+    fatal: str | None = None
+    for term in terms:
+        for location in locations:
+            left = gm.max_searches - searches - lookups
+            if left <= 0:
+                notes.append(f"Stopped at the limit of {gm.max_searches} Google requests.")
+                break
+            try:
+                area = await places.search_area(term, location, gm.radius_miles, left)
+            except PlacesError as exc:
+                lookups += 1  # the centre lookup that failed is still billed
+                if exc.status in (401, 403, 429):
+                    fatal = exc.message
+                    break
+                notes.append(f"{term} around {location}: {exc.message}")
+                continue
+            searches += area.searches
+            lookups += area.center_lookups
+            capped += area.capped_cells
+            for pid, place in area.places.items():
+                found.setdefault(pid, place)
+            if area.stopped_at_limit:
+                notes.append(f"Stopped at the limit of {gm.max_searches} Google requests.")
+                break
+        if fatal or searches + lookups >= gm.max_searches:
+            break
+    if capped:
+        notes.append(f"{capped} area{'s were' if capped != 1 else ' was'} still full after the finest split, so Google may have more there.")
+
+    cost = round(searches * SEARCH_COST_USD + lookups * CENTER_COST_USD, 4)
+    if searches + lookups:
+        await calls.record(
+            workspace_id, "google_places", "places:searchText", "failed" if fatal and not found else "succeeded",
+            credits=searches + lookups, cost_usd=cost, action="Find companies",
+        )  # fmt: skip
+
+    chains = 0
+    to_add = []
+    for place in found.values():
+        domain = normalize_domain(place.website_url)
+        kind = shared_domain(domain)
+        if kind == "chain":
+            chains += 1
+            continue
+        to_add.append((place, None if kind == "platform" else domain))
+    if chains:
+        notes.append(f"{chains} national chain location{'s' if chains != 1 else ''} skipped.")
+    added, dupes = await companies.add_google_maps(workspace_id, body.icp_id, to_add)
+    return SourceFindResult(
+        found=len(found), added=added, duplicates=dupes, error=fatal, searches=searches + lookups, cost_usd=cost, notes=notes,
+    )
 
 
 @router.post("/research", response_model=ResearchResult)
@@ -159,13 +238,13 @@ async def research(
     apify: ApifyClient | None = Depends(get_optional_apify),
     scorer: CompanyScorer | None = Depends(get_optional_scorer),
 ) -> ResearchResult:
-    """Research Apollo companies against their ICP and decide: qualified or not a fit.
+    """Research Apollo and Google Maps companies against their ICP and decide: qualified or not a fit.
 
     Lead Intel companies are skipped: Lead Intel already verified them. Up to 10 at a time; a
     website read takes up to 30 seconds (they're read three at a time).
     """
     rows = await companies.get_many(workspace_id, list(dict.fromkeys(body.company_ids)))
-    todo = [c for c in rows if c.source == "apollo" and (body.force or c.researched_at is None)]
+    todo = [c for c in rows if c.source != "lead_intel" and (body.force or c.researched_at is None)]
     skipped = len(body.company_ids) - len(todo)
     if not todo:
         return ResearchResult(researched=0, skipped=skipped, qualified=0, not_fit=0, errors=0, cost_usd=0, notes=[])

@@ -34,7 +34,7 @@ class FakeCompanies:
 
     def _row(self, **kw):
         base = dict(id=uuid4(), workspace_id=WORKSPACE_ID, icp_id=ICP_ID, lead_intel_business_id=None, apollo_org_id=None,
-                    domain=None, website_url=None, linkedin_url=None, facebook_url=None, twitter_url=None,
+                    google_place_id=None, phone=None, domain=None, website_url=None, linkedin_url=None, facebook_url=None, twitter_url=None,
                     instagram_url=None, city=None, state=None, status_reason=None, overridden=False, rule_fit=None,
                     rule_detail=None, score=None, score_detail=None, research=None, researched_at=None, raw=None,
                     created_at=datetime.now(UTC))  # fmt: skip
@@ -62,6 +62,17 @@ class FakeCompanies:
                 dupes += 1
             else:
                 self._row(source="apollo", apollo_org_id=o.apollo_id, name=o.name, domain=o.domain, status="found")
+                added += 1
+        return added, dupes
+
+    async def add_google_maps(self, ws, icp_id, places):
+        added = dupes = 0
+        for place, domain in places:
+            if any(r.google_place_id == place.place_id or (domain and r.domain == domain) for r in self.rows.values()):
+                dupes += 1
+            else:
+                self._row(source="google_maps", google_place_id=place.place_id, name=place.name, domain=domain,
+                          website_url=place.website_url, phone=place.phone, status="found")  # fmt: skip
                 added += 1
         return added, dupes
 
@@ -119,7 +130,10 @@ def find(client, **body):
 
 def test_find_from_both_sources_dedupes_by_domain(client, env) -> None:
     result = find(client).json()
-    assert result["leadIntel"] == {"found": 1, "added": 1, "duplicates": 0, "upgraded": 0, "totalAvailable": 1, "error": None}
+    assert result["leadIntel"] == {
+        "found": 1, "added": 1, "duplicates": 0, "upgraded": 0, "totalAvailable": 1, "error": None,
+        "searches": None, "costUsd": None, "notes": [],
+    }  # fmt: skip
     # Apollo's Glow Med Spa has the same domain as the Lead Intel company: a duplicate, not a second row.
     assert (result["apollo"]["found"], result["apollo"]["added"], result["apollo"]["duplicates"]) == (2, 1, 1)
     assert result["apollo"]["totalAvailable"] == 57

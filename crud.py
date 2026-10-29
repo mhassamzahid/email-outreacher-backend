@@ -14,6 +14,7 @@ from models import (
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
 from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
+from services.google_places import Place
 from services.leads import Existing, LeadInput
 from services.prompts import DEFAULTS
 
@@ -905,6 +906,44 @@ class CompanyRepo:
             by_apollo[org.apollo_id] = row
             if org.domain:
                 by_domain[org.domain] = row
+            added += 1
+        await self.session.commit()
+        return added, dupes
+
+    async def add_google_maps(self, workspace_id: UUID, icp_id: UUID, places: list[tuple[Place, str | None]]) -> tuple[int, int]:
+        """Add Google Maps businesses to be researched, each with its website domain (or None).
+        Returns (added, duplicates): the same place id, or the same domain as a company already here
+        from any source, is a duplicate."""
+        _, _, by_domain = await self._by_keys(workspace_id)
+        by_place = set(await self.session.scalars(
+            select(Company.google_place_id).where(Company.workspace_id == workspace_id, Company.google_place_id.is_not(None))
+        ))  # fmt: skip
+        added = dupes = 0
+        for place, domain in places:
+            if place.place_id in by_place or (domain and domain in by_domain):
+                dupes += 1
+                continue
+            row = Company(
+                workspace_id=workspace_id,
+                icp_id=icp_id,
+                source="google_maps",
+                google_place_id=place.place_id,
+                name=place.name,
+                domain=domain,
+                website_url=place.website_url,
+                phone=place.phone,
+                city=place.city,
+                state=place.state,
+                status="found",
+                raw={
+                    "address": place.address, "rating": place.rating, "review_count": place.review_count,
+                    "business_status": place.business_status, "primary_type": place.primary_type, "country": place.country,
+                },
+            )  # fmt: skip
+            self.session.add(row)
+            by_place.add(place.place_id)
+            if domain:
+                by_domain[domain] = row
             added += 1
         await self.session.commit()
         return added, dupes

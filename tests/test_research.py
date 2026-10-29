@@ -115,10 +115,13 @@ async def test_research_reads_checks_scores_and_decides() -> None:
     assert down.status == "not_fit" and "couldn't be read" in down.status_reason
     # Places were applied by Apollo's search, so they're skipped, not failed.
     assert good.rule_detail["skipped"]
-    # Only the company that passed the rule was sent to Claude; Instagram read once for the batch.
-    assert scorer.calls == 1 and apify.asked == [["inkco"]]
+    # Claude reads every site that could be reached (it picks the pages the rule then checks), so the
+    # three reachable companies were each scored once; the unreachable one wasn't. The rule still
+    # decides: the two that failed it are not a fit despite Claude's 82, which is kept for reference.
+    assert scorer.calls == 3 and apify.asked == [["inkco"]]
+    assert wrong.score == 82 and wrong.score_detail["summary"] and down.score is None
     assert summary.apify_cost_usd == 0.0026
-    assert (summary.claude_calls, summary.input_tokens, summary.output_tokens) == (1, 900, 120)
+    assert (summary.claude_calls, summary.input_tokens, summary.output_tokens) == (3, 2700, 360)
     # What was read comes back to be stored: page texts (not kept in the company's research JSON) and posts.
     via, pages = summary.pages[good.id]
     assert via == "own_crawl" and pages[0]["text"] == "Same day screen printing" and "text" not in good.research["website"]["pages"][0]

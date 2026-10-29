@@ -127,6 +127,24 @@ async def research_companies(
         try:
             profiles, run = await apify.instagram_profiles(list(handles.values()))
             summary.apify_cost_usd += run.cost_usd or 0
+            # A stored handle Instagram doesn't know (renamed, or wrong where it came from): try the
+            # account the company's own website links to, when that's a different one.
+            retry = {}
+            for company, site in zip(companies, sites, strict=True):
+                linked = instagram_handle((site.socials if site else {}).get("instagram"))
+                if company.id in handles and handles[company.id] not in profiles and linked and linked != handles[company.id]:
+                    retry[company.id] = linked
+            if retry:
+                more, run = await apify.instagram_profiles(list(retry.values()))
+                summary.apify_cost_usd += run.cost_usd or 0
+                profiles.update(more)
+                for company in companies:
+                    if company.id in retry and retry[company.id] in more:
+                        handles[company.id] = retry[company.id]
+                        company.instagram_url = f"https://www.instagram.com/{retry[company.id]}/"
+            missing = [f"@{h}" for h in handles.values() if h not in profiles]
+            if missing:
+                summary.notes.append(f"Instagram couldn't find {', '.join(missing)} (renamed, private or removed).")
         except ApifyError as exc:
             summary.notes.append(f"Instagram profiles weren't read: {exc.message}")
     elif handles:

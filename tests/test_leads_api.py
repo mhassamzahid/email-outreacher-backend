@@ -22,6 +22,9 @@ class FakeLeadRepo:
     async def workspace_exists(self, workspace_id):
         return workspace_id == WORKSPACE_ID
 
+    async def post_counts(self, lead_ids):
+        return {}
+
     async def find_existing(self, workspace_id, leads):
         found = Existing()
         for row in self.rows:

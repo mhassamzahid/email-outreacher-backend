@@ -111,14 +111,36 @@ def linkedin_slug(url: str | None) -> str | None:
     return match.group(1).lower() if match else None
 
 
+# Instagram's own routes, which are nobody's profile.
+INSTAGRAM_ROUTES = {"p", "reel", "reels", "tv", "explore", "stories", "s", "accounts", "direct", "about"}
+# Accounts that belong to a platform a business links to, not to the business. From Lead Intel: a
+# salon's site built on Booksy links Booksy's Instagram, and its 142,000 followers end up reported
+# as the salon's.
+PLATFORM_ACCOUNTS = {
+    "booksybiz", "booksy", "vagaro", "glossgenius", "styleseat", "fresha", "schedulicity", "setmore",
+    "acuityscheduling", "square", "squareup", "squarespace", "wix", "shopify", "godaddy", "weebly",
+    "webflow", "bigcartel", "wordpress", "wordpressdotcom", "linktree", "instagram", "facebook", "meta",
+    "whatsapp", "etsy", "yelp",
+}  # fmt: skip
+HANDLE = re.compile(r"^[a-z0-9._]{1,30}$")
+
+
 def instagram_handle(url: str | None) -> str | None:
-    """'https://instagram.com/samedaycustom/' -> 'samedaycustom'. Post and reel URLs give None."""
-    if not url:
+    """'https://instagram.com/samedaycustom/' or '@samedaycustom' -> 'samedaycustom'. Post and reel
+    URLs, Instagram's own pages and platform accounts give None."""
+    if not url or not url.strip():
         return None
-    path = [p for p in urlsplit(url if "://" in url else f"https://{url}").path.split("/") if p]
-    if not path or path[0] in {"p", "reel", "reels", "explore", "stories"}:
+    value = url.strip()
+    if "instagram.com" not in value.lower():
+        handle = value.lstrip("@").lower()
+    else:
+        path = [p for p in urlsplit(value if "://" in value else f"https://{value}").path.split("/") if p]
+        if not path or path[0].lower() in INSTAGRAM_ROUTES:
+            return None
+        handle = path[0].lstrip("@").lower()
+    if not HANDLE.match(handle) or handle in PLATFORM_ACCOUNTS:
         return None
-    return path[0].lstrip("@").lower()
+    return handle
 
 
 def _message(response: httpx.Response) -> str:
@@ -194,6 +216,9 @@ class ApifyClient:
             "GET", f"/datasets/{run['defaultDatasetId']}/items", params={"clean": "true", "format": "json", "limit": max_items}
         )
         cost = run.get("usageTotalUsd")
+        if not cost:
+            # Apify fills in the run's cost a moment after it finishes; read it again once.
+            cost = (await self._request("GET", f"/actor-runs/{run['id']}"))["data"].get("usageTotalUsd")
         return RunResult(items=items if isinstance(items, list) else [], cost_usd=float(cost) if cost is not None else None, run_id=run.get("id"))
 
     # ---- Actors ----

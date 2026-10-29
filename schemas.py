@@ -412,12 +412,22 @@ class ApolloFindIn(ApiModel):
     per_page: int = Field(default=25, ge=1, le=100)
 
 
+class GoogleMapsFindIn(ApiModel):
+    # Default to the ICP's search terms and places when empty.
+    search_terms: list[str] = Field(default=[], max_length=10)
+    locations: list[str] = Field(default=[], max_length=10)
+    radius_miles: float = Field(default=10, ge=1, le=50)
+    # Google charges per request ($0.035 each), so the run stops here, whatever is left to search.
+    max_searches: int = Field(default=20, ge=1, le=500)
+
+
 class FindCompaniesIn(ApiModel):
     icp_id: UUID
-    sources: list[Literal["lead_intel", "apollo"]] = Field(default=["lead_intel", "apollo"], min_length=1)
+    sources: list[Literal["lead_intel", "apollo", "google_maps"]] = Field(default=["lead_intel", "apollo"], min_length=1)
     # Only these of the ICP's Lead Intel companies; all of them when not given.
     lead_intel_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=2000)
     apollo: ApolloFindIn = ApolloFindIn()
+    google_maps: GoogleMapsFindIn = GoogleMapsFindIn()
 
 
 class SourceFindResult(ApiModel):
@@ -429,11 +439,16 @@ class SourceFindResult(ApiModel):
     upgraded: int = 0
     total_available: int | None = None
     error: str | None = None
+    # Google Maps: requests made, what they cost, and anything worth knowing about the run.
+    searches: int | None = None
+    cost_usd: float | None = None
+    notes: list[str] = []
 
 
 class FindCompaniesResult(ApiModel):
     lead_intel: SourceFindResult | None
     apollo: SourceFindResult | None
+    google_maps: SourceFindResult | None = None
 
 
 class PipelineCompanyOut(ApiModel):
@@ -442,6 +457,7 @@ class PipelineCompanyOut(ApiModel):
     source: str
     lead_intel_business_id: UUID | None
     apollo_org_id: str | None
+    google_place_id: str | None
     name: str
     domain: str | None
     website_url: str | None
@@ -451,6 +467,7 @@ class PipelineCompanyOut(ApiModel):
     instagram_url: str | None
     city: str | None
     state: str | None
+    phone: str | None
     status: str
     status_reason: str | None
     overridden: bool

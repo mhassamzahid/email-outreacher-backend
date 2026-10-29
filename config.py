@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     # Providers.
     apollo_api_key: str | None = None
     apify_token: str | None = None
+    # Google Places API (New), for finding companies on Google Maps.
+    google_places_api_key: str | None = None
     openai_api_key: str | None = None
     # Jina Reader, for websites that need a browser to render. Works without a key at a lower limit.
     jina_api_key: str | None = None

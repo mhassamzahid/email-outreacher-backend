@@ -29,6 +29,7 @@ from lead_intel_writes import LeadIntelIcpWriter
 from services.apify import ApifyClient
 from services.apollo import ApolloClient
 from services.generation import EmailWriter
+from services.google_places import PlacesClient
 from services.jina import JinaClient
 from services.scoring import CompanyScorer
 from services.website import WebsiteReader
@@ -169,6 +170,16 @@ async def get_optional_apollo() -> AsyncIterator[ApolloClient | None]:
 async def get_optional_apify() -> AsyncIterator[ApifyClient | None]:
     token = get_settings().apify_token
     client = ApifyClient(token) if token else None
+    try:
+        yield client
+    finally:
+        if client:
+            await client.aclose()
+
+
+async def get_optional_places() -> AsyncIterator[PlacesClient | None]:
+    key = get_settings().google_places_api_key
+    client = PlacesClient(key) if key else None
     try:
         yield client
     finally:
