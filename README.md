@@ -55,6 +55,7 @@ Admins open every workspace and manage users and workspaces; Management and admi
 | GET/POST | `/api/v1/exclusions` | The do-not-contact list (every workspace): companies by domain, phone, Google place id or name and city; people by email or its domain. Excluded ones are never found, made leads, or written to. Management and admins change it |
 | DELETE | `/api/v1/exclusions/{id}` | Take an entry off the list |
 | POST | `/api/v1/exclusions/company/{companyId}` | Put a pipeline company on the list by every key it has, and mark it not a fit |
+| GET | `/api/v1/mailboxes` | The sending mailboxes from CheapSequencer (limits, warmup, today's sends and placements), plan usage, campaigns, and each domain's DNS health from CheapInboxes. Read-only |
 | GET | `/api/v1/me` | The signed-in person: role, status and workspaces |
 | GET/POST | `/api/v1/users` | Admins: everyone; add someone by email with a role and workspaces, ready for their first sign-in |
 | PATCH/DELETE | `/api/v1/users/{id}` | Admins: change role, status or workspaces; remove from this app (their Supabase account stays). The last active admin can't be lost |

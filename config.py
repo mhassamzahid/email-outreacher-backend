@@ -49,7 +49,9 @@ class Settings(BaseSettings):
     # Requests per minute to allow Jina. Defaults sit just under its published limits
     # (20 without a key, 500 with one) so a burst never trips them.
     jina_rpm: int | None = None
+    # Sending: CheapSequencer runs the campaigns; CheapInboxes runs the mailboxes and their domains.
     cheapsequencer_api_key: str | None = None
+    cheapinboxes_api_key: str | None = None
     cheapsequencer_webhook_secret: str | None = None
 
     @property

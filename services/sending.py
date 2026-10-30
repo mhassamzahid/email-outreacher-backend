@@ -1,0 +1,190 @@
+"""CheapSequencer (sending) and CheapInboxes (mailboxes and domains).
+
+CheapSequencer sends the campaigns through 16 Google mailboxes and keeps them warmed up; CheapInboxes
+sells and runs those mailboxes and their domains. CheapInboxes is only read. CheapSequencer is read, and
+written in exactly these ways: lists, CSV imports of leads (with each lead's emails in custom fields),
+enrolling a list into a campaign, and the step text of a draft or paused campaign. Nothing here can
+activate a campaign or send an email: that stays a person's decision in CheapSequencer.
+
+Docs: https://docs.cheapsequencer.com/llms.txt and https://api.cheapinboxes.com/v1/openapi.json.
+"""
+
+import asyncio
+import csv
+import io
+from typing import Any
+
+import httpx
+
+SEQUENCER_URL = "https://api.cheapsequencer.com/v1"
+INBOXES_URL = "https://api.cheapinboxes.com"
+
+
+class SendingError(Exception):
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+def _message(service: str, response: httpx.Response) -> str:
+    try:
+        body = response.json()
+        detail = (body.get("error") or {}).get("message") if isinstance(body.get("error"), dict) else body.get("message")
+    except ValueError:
+        detail = None
+    if response.status_code in (401, 403):
+        return f"{service} rejected the API key. Check it in the backend's .env."
+    if response.status_code == 429:
+        return f"{service}'s rate limit was reached. Try again in a minute."
+    return f"{service} answered {response.status_code}: {detail or 'no details'}"
+
+
+class _Client:
+    service = ""
+
+    def __init__(self, base_url: str, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._client = httpx.AsyncClient(
+            base_url=base_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=30, transport=transport
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def get(self, path: str, **params: Any) -> Any:
+        try:
+            response = await self._client.get(path, params=params or None)
+        except httpx.HTTPError as exc:
+            raise SendingError(f"Couldn't reach {self.service}: {exc.__class__.__name__}") from exc
+        if response.status_code >= 400:
+            raise SendingError(_message(self.service, response), response.status_code)
+        return response.json()
+
+
+class SequencerClient(_Client):
+    service = "CheapSequencer"
+
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        super().__init__(SEQUENCER_URL, api_key, transport)
+
+    async def all(self, path: str) -> list[dict[str, Any]]:
+        """Every row of a list endpoint, following its cursor."""
+        rows: list[dict[str, Any]] = []
+        cursor = None
+        for _ in range(50):
+            body = await self.get(path, limit=100, **({"cursor": cursor} if cursor else {}))
+            rows += body.get("data") or []
+            meta = body.get("meta") or {}
+            cursor = meta.get("next_cursor")
+            if not meta.get("has_more") or not cursor:
+                break
+        return rows
+
+    async def warmup_inboxes(self) -> list[dict[str, Any]]:
+        """Each mailbox with its limits, warmup state and today's sends and placements."""
+        return await self.all("/warmup/inboxes")
+
+    async def warmup(self) -> dict[str, Any]:
+        return (await self.get("/warmup")).get("data") or {}
+
+    async def usage(self) -> dict[str, Any]:
+        return (await self.get("/usage")).get("data") or {}
+
+    async def campaigns(self) -> list[dict[str, Any]]:
+        return await self.all("/campaigns")
+
+    async def campaign(self, campaign_id: str) -> tuple[dict[str, Any], str]:
+        """A campaign with its steps, and its ETag for an update."""
+        try:
+            response = await self._client.get(f"/campaigns/{campaign_id}")
+        except httpx.HTTPError as exc:
+            raise SendingError(f"Couldn't reach {self.service}: {exc.__class__.__name__}") from exc
+        if response.status_code >= 400:
+            raise SendingError(_message(self.service, response), response.status_code)
+        body = response.json().get("data") or {}
+        return body, response.headers.get("ETag") or body.get("etag") or ""
+
+    async def enrollments(self, campaign_id: str) -> list[dict[str, Any]]:
+        """Each lead's place in the campaign: status, sent_count, last_sent_at, replied_at..."""
+        return await self.all(f"/campaigns/{campaign_id}/enrollments")
+
+    # ---- Writes: never activate, never send. ----
+
+    async def _write(self, method: str, path: str, key: str, body: Any = None, etag: str | None = None) -> dict[str, Any]:
+        headers = {"Idempotency-Key": key[:255]}
+        if etag:
+            headers["If-Match"] = etag
+        try:
+            response = await self._client.request(method, path, json=body if body is not None else {}, headers=headers)
+        except httpx.HTTPError as exc:
+            raise SendingError(f"Couldn't reach {self.service}: {exc.__class__.__name__}") from exc
+        if response.status_code >= 400:
+            raise SendingError(_message(self.service, response), response.status_code)
+        return response.json().get("data") or {}
+
+    async def _wait(self, action: dict[str, Any], what: str, seconds: int = 180) -> dict[str, Any]:
+        """Poll a queued command until it finishes."""
+        for _ in range(seconds // 2):
+            if action.get("status") in ("completed", "failed", "cancelled"):
+                break
+            await asyncio.sleep(action.get("retry_after_seconds") or 2)
+            action = (await self.get(f"/api-actions/{action['id']}")).get("data") or action
+        if action.get("status") != "completed":
+            error = action.get("error") or {}
+            raise SendingError(f"{what} didn't finish in CheapSequencer ({action.get('status')}): {error.get('message') or 'no details'}")
+        return action
+
+    async def create_list(self, name: str, key: str) -> str:
+        created = await self._write("POST", "/lists", key, {"name": name[:120]})
+        return (created.get("list") or created)["id"]
+
+    async def import_rows(self, list_id: str, rows: list[dict[str, str]], key: str) -> dict[str, Any]:
+        """Upsert leads by email from rows of lead fields (built-in names or custom field tags), into a
+        list. Re-importing a lead updates it, which is how a follow-up's text is written."""
+        if not rows:
+            return {}
+        columns = list(dict.fromkeys(c for row in rows for c in row))
+        out = io.StringIO()
+        writer = csv.DictWriter(out, fieldnames=columns, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+        data = out.getvalue().encode()
+        up = await self._write("POST", "/imports/upload-url", f"{key}-url",
+                               {"list_id": list_id, "filename": "coldbrew.csv", "content_type": "text/csv", "size_bytes": len(data)})  # fmt: skip
+        upload, import_id = up["upload"], up["import"]["id"]
+        try:
+            put = await self._client.request(upload.get("method", "PUT"), upload["url"], content=data,
+                                             headers=up.get("headers") or {"Content-Type": "text/csv"})  # fmt: skip
+        except httpx.HTTPError as exc:
+            raise SendingError(f"Couldn't upload the CSV to CheapSequencer: {exc.__class__.__name__}") from exc
+        if put.status_code >= 400:
+            raise SendingError(f"CheapSequencer's upload answered {put.status_code}.")
+        await self._write("POST", f"/imports/{import_id}/mapping-suggestion", f"{key}-suggest")
+        await self._write("POST", f"/imports/{import_id}/mapping", f"{key}-map",
+                          {"mapping": {c: c for c in columns}, "has_header": True, "delimiter": ","})  # fmt: skip
+        processed = await self._write("POST", f"/imports/{import_id}/process", f"{key}-process")
+        await self._wait(processed.get("action") or processed, "The import")
+        return (await self.get(f"/imports/{import_id}")).get("data") or {}
+
+    async def enroll(self, campaign_id: str, list_id: str, key: str) -> None:
+        """Enroll a list's leads into a campaign. A draft or paused campaign doesn't send them."""
+        queued = await self._write("POST", f"/campaigns/{campaign_id}/enrollments", key, {"list_ids": [list_id]})
+        await self._wait(queued.get("action") or queued, "Adding the leads to the campaign")
+
+    async def set_steps(self, campaign_id: str, steps: list[dict[str, Any]], etag: str, key: str) -> dict[str, Any]:
+        """Replace a draft or paused campaign's step copy (ids echoed, so the steps are kept)."""
+        return await self._write("PATCH", f"/campaigns/{campaign_id}", key, {"steps": steps}, etag)
+
+
+class InboxesClient(_Client):
+    service = "CheapInboxes"
+
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        super().__init__(INBOXES_URL, api_key, transport)
+
+    async def domains(self) -> list[dict[str, Any]]:
+        return (await self.get("/v1/domains")).get("domains") or []
+
+    async def dns_health(self, domain_id: str) -> dict[str, Any]:
+        body = await self.get(f"/v1/domains/{domain_id}/dns-health")
+        return body.get("data", body)

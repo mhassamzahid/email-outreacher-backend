@@ -35,6 +35,7 @@ from services.generation import EmailWriter
 from services.google_places import PlacesClient
 from services.jina import JinaClient
 from services.scoring import CompanyScorer
+from services.sending import InboxesClient, SequencerClient
 from services.website import WebsiteReader
 
 
@@ -228,6 +229,26 @@ async def get_optional_apify() -> AsyncIterator[ApifyClient | None]:
 async def get_optional_places() -> AsyncIterator[PlacesClient | None]:
     key = get_settings().google_places_api_key
     client = PlacesClient(key) if key else None
+    try:
+        yield client
+    finally:
+        if client:
+            await client.aclose()
+
+
+async def get_optional_sequencer() -> AsyncIterator[SequencerClient | None]:
+    key = get_settings().cheapsequencer_api_key
+    client = SequencerClient(key) if key else None
+    try:
+        yield client
+    finally:
+        if client:
+            await client.aclose()
+
+
+async def get_optional_inboxes() -> AsyncIterator[InboxesClient | None]:
+    key = get_settings().cheapinboxes_api_key
+    client = InboxesClient(key) if key else None
     try:
         yield client
     finally:

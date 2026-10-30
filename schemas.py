@@ -283,6 +283,78 @@ class ExclusionOut(ApiModel):
     created_at: datetime
 
 
+# ---------- Sending: mailboxes (CheapSequencer) and their domains (CheapInboxes) ----------
+
+
+class MailboxOut(ApiModel):
+    id: str
+    email: str
+    name: str
+    domain: str
+    provider: str
+    status: str
+    auth_status: str
+    needs_attention: bool
+    last_error: str | None
+    tags: list[str]
+    campaign_daily: int
+    warmup_daily: int
+    total_daily: int
+    warmup_enabled: bool
+    warmup_state: str | None
+    warmup_started_at: str | None
+    last_sent_at: str | None
+    today_sends: int
+    today_replies: int
+    today_failed: int
+    today_inbox: int
+    today_spam: int
+    today_saved: int
+    today_unknown: int
+
+
+class DomainHealth(ApiModel):
+    domain: str
+    status: str
+    health: str
+    # Each failing DNS check, in a sentence.
+    problems: list[str]
+
+
+class CampaignBrief(ApiModel):
+    name: str
+    status: str
+    daily_send_cap: int | None
+
+
+class SendingSummary(ApiModel):
+    connected: int
+    connected_limit: int | None
+    sends_used: int
+    sends_limit: int | None
+    period_ends_at: str | None
+    # Campaign emails all mailboxes may send per day, together.
+    campaign_daily: int
+    warmup_today_sends: int
+    warmup_today_inbox: int
+    warmup_today_spam: int
+    warmup_today_saved: int
+    warmup_week_sent: int
+    warmup_week_inbox: int
+    warmup_week_spam: int
+    warmup_week_saved: int
+    needing_review: int
+
+
+class MailboxesOut(ApiModel):
+    summary: SendingSummary
+    mailboxes: list[MailboxOut]
+    domains: list[DomainHealth]
+    campaigns: list[CampaignBrief]
+    # Why part of the page is missing (a key not set, a service down).
+    errors: list[str]
+
+
 # ---------- Users ----------
 
 UserRole = Literal["sales", "management", "admin"]
