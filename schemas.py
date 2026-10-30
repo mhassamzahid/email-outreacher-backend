@@ -404,6 +404,68 @@ class QueueOut(ApiModel):
     results: list[QueueOutcomeOut]
 
 
+class OutboxStepOut(ApiModel):
+    step: int
+    subject: str  # empty on 2 and 3: they reply in the same thread
+    body: str
+    # waiting: not sent yet; sent; skipped: the sequence ended before it.
+    status: str
+    # False while email 2 or 3 is still the generic text from Settings.
+    personalized: bool
+    sent_at: datetime | None = None
+
+
+class OutboxRowOut(ApiModel):
+    email_id: UUID
+    lead_id: UUID
+    name: str
+    email: str
+    title: str
+    company: str
+    campaign_id: str
+    campaign: str
+    # The mailbox all three emails go out from, once CheapSequencer has assigned one.
+    mailbox: str | None = None
+    # queued, sending, replied, bounced, unsubscribed, failed, paused, stopped or finished.
+    state: str
+    sent: int
+    queued_at: datetime | None = None
+    last_sent_at: datetime | None = None
+    synced_at: datetime | None = None
+    steps: list[OutboxStepOut]
+
+
+class ReplyThreadOut(ApiModel):
+    id: str
+    subject: str
+    preview: str
+    mailbox: str
+    lead_email: str
+    lead_name: str
+    lead_id: UUID | None = None
+    campaign: str
+    last_message_at: datetime | None = None
+    message_count: int
+    inbound_count: int
+    unread_count: int
+    classification: str | None = None
+
+
+class ReplyMessageOut(ApiModel):
+    id: str
+    direction: str  # inbound | outbound
+    from_name: str
+    from_address: str
+    to: list[str]
+    sent_at: datetime | None = None
+    subject: str
+    body: str
+
+
+class ReplyThreadDetailOut(ReplyThreadOut):
+    messages: list[ReplyMessageOut]
+
+
 class FollowUpRunOut(ApiModel):
     checked: int
     written: int

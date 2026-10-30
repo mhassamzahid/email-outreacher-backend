@@ -4,6 +4,8 @@ Nothing here activates a campaign or sends: emails wait in a campaign until a pe
 CheapSequencer. See services/outreach.py for how queueing and follow-ups work.
 """
 
+import asyncio
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,7 +20,8 @@ from dependencies import (
 )  # fmt: skip
 from lead_intel import LeadIntelRepo
 from schemas import (
-    FollowUpRunOut, QueueIn, QueueOut, QueueOutcomeOut, SendingCampaignOut, SendingSettingsIn, SendingSettingsOut, TemplateOutcomeOut,
+    FollowUpRunOut, OutboxRowOut, OutboxStepOut, QueueIn, QueueOut, QueueOutcomeOut, ReplyMessageOut, ReplyThreadDetailOut,
+    ReplyThreadOut, SendingCampaignOut, SendingSettingsIn, SendingSettingsOut, TemplateOutcomeOut,
 )  # fmt: skip
 from services import outreach
 from services.auth import CurrentUser
@@ -115,3 +118,77 @@ async def run_follow_ups(deps: outreach.Deps = Depends(_deps)) -> FollowUpRunOut
     return FollowUpRunOut(checked=result.checked, written=result.written, ended=result.ended,
                           cost_usd=round(result.cost_usd, 4), notes=result.notes)  # fmt: skip
 
+
+
+async def _campaign_names(deps: outreach.Deps) -> dict[str, str]:
+    """Coldbrew's campaigns by id. Raises SendingError when CheapSequencer can't be reached."""
+    return {c["id"]: c.get("name") or "" for c in await deps.sequencer.campaigns() if (c.get("name") or "").startswith(outreach.CAMPAIGN_PREFIX)}
+
+
+@router.get("/outbox", response_model=list[OutboxRowOut])
+async def outbox(deps: outreach.Deps = Depends(_deps)) -> list[OutboxRowOut]:
+    """Every lead Coldbrew queued, with its three emails and where the sequence stands, as of the
+    last follow-up check. Read from Coldbrew's own records; only the campaign names come from CheapSequencer."""
+    pairs = await deps.sending.outbox(deps.workspace_id)
+    try:
+        names = await _campaign_names(deps)
+    except SendingError:
+        names = {}
+    settings = await deps.settings.sending(deps.workspace_id)
+    fallbacks = {2: settings["followup_fallback_2"], 3: settings["followup_fallback_3"]}
+    later = await deps.sending.follow_ups([lead.id for _, lead in pairs])
+    rows = []
+    for email, lead in pairs:
+        steps = outreach.outbox_steps(email, lead, {s: later[(lead.id, s)] for s in (2, 3) if (lead.id, s) in later}, fallbacks)
+        rows.append(OutboxRowOut(
+            email_id=email.id, lead_id=lead.id, name=f"{lead.first_name or ''} {lead.last_name or ''}".strip() or (lead.email or ""),
+            email=lead.email or "", title=lead.title or "", company=lead.company or "",
+            campaign_id=email.sequencer_campaign_id or "", campaign=names.get(email.sequencer_campaign_id or "", "") or "Campaign",
+            mailbox=email.sequencer_inbox_email, state=outreach.lead_state(email), sent=email.sequence_sent_count or 0,
+            queued_at=email.queued_at, last_sent_at=email.sequence_last_sent_at, synced_at=email.sequence_synced_at,
+            steps=[OutboxStepOut(**vars(st)) for st in steps],
+        ))  # fmt: skip
+    return rows
+
+
+async def _with_leads(deps: outreach.Deps, threads: list[dict]) -> list[dict]:
+    leads = await deps.sending.leads_by_email(deps.workspace_id, [t["lead_email"] for t in threads if t["lead_email"]])
+    for t in threads:
+        if lead := leads.get(t["lead_email"]):
+            t["lead_id"] = lead.id
+            t["lead_name"] = f"{lead.first_name or ''} {lead.last_name or ''}".strip() or t["lead_name"]
+    return threads
+
+
+@router.get("/replies", response_model=list[ReplyThreadOut])
+async def replies(deps: outreach.Deps = Depends(_deps)) -> list[ReplyThreadOut]:
+    """Conversations in Coldbrew's campaigns where the lead wrote back, newest first, from
+    CheapSequencer's unified inbox. Read-only: nothing is marked read or answered from here."""
+    try:
+        names = await _campaign_names(deps)
+        found = await asyncio.gather(*(deps.sequencer.threads(cid) for cid in names))
+        threads = [outreach.thread_summary(t, name) for name, rows in zip(names.values(), found, strict=True) for t in rows
+                   if int(t.get("inbound_count") or 0) > 0]  # fmt: skip
+    except SendingError as exc:
+        raise HTTPException(status_code=502, detail=exc.message) from exc
+    threads.sort(key=lambda t: t["last_message_at"] or datetime.min.replace(tzinfo=UTC), reverse=True)
+    return [ReplyThreadOut(**t) for t in await _with_leads(deps, threads)]
+
+
+@router.get("/replies/{thread_id:path}", response_model=ReplyThreadDetailOut)
+async def reply_thread(thread_id: str, deps: outreach.Deps = Depends(_deps)) -> ReplyThreadDetailOut:
+    """One conversation with every message, oldest first."""
+    try:
+        names = await _campaign_names(deps)
+        body = await deps.sequencer.thread(thread_id)
+    except SendingError as exc:
+        raise HTTPException(status_code=404 if exc.status == 404 else 502, detail=exc.message) from exc
+    thread = body.get("thread") or {}
+    sequence = thread.get("sequence")
+    campaign_id = next((sequence.get(k) for k in ("id", "campaign_id", "sequence_id") if sequence.get(k)), None) if isinstance(sequence, dict) else sequence
+    if campaign_id not in names:
+        raise HTTPException(status_code=404, detail="That conversation isn't in a Coldbrew campaign")
+    [summary] = await _with_leads(deps, [outreach.thread_summary(thread, names[campaign_id])])
+    messages = sorted((outreach.message_summary(m) for m in body.get("messages") or []),
+                      key=lambda m: m["sent_at"] or datetime.min.replace(tzinfo=UTC))  # fmt: skip
+    return ReplyThreadDetailOut(**summary, messages=[ReplyMessageOut(**m) for m in messages])

@@ -388,6 +388,77 @@ async def run_follow_ups(deps: Deps, now: datetime | None = None) -> FollowUpRun
     return run
 
 
+# ---------- What was queued, sent and replied ----------
+
+
+STOPPED = {"stopped", "removed", "cancelled"}
+
+
+def lead_state(email: Email) -> str:
+    """Where a queued lead's sequence stands, from the last follow-up check."""
+    if email.sequence_stop_reason:
+        return email.sequence_stop_reason
+    status = email.sequence_status or "queued"
+    if status == "completed":
+        return "finished"
+    if status in STOPPED:
+        return "stopped"
+    if status == "paused":
+        return "paused"
+    return "sending" if (email.sequence_sent_count or 0) > 0 else "queued"
+
+
+@dataclass
+class OutboxStep:
+    step: int
+    subject: str
+    body: str
+    status: str  # waiting | sent | skipped
+    personalized: bool
+    sent_at: datetime | None
+
+
+def outbox_steps(email: Email, lead: Lead, later: dict[int, Email], fallbacks: dict[int, str]) -> list[OutboxStep]:
+    """The three emails as the lead gets them: email 2 and 3 are the generic text until Claude writes them."""
+    sent = email.sequence_sent_count or 0
+    ended = lead_state(email) not in ("queued", "sending")
+    steps = [OutboxStep(1, email.subject, email.edited_body or email.body, "sent" if sent >= 1 else "skipped" if ended else "waiting",
+                        True, email.sent_at)]  # fmt: skip
+    for step in (2, 3):
+        row = later.get(step)
+        body = (row.edited_body or row.body) if row else first_name_in(fallbacks[step], lead.first_name or "")
+        status = "sent" if sent >= step else "skipped" if ended else "waiting"
+        steps.append(OutboxStep(step, "", body, status, row is not None, row.sent_at if row else None))
+    return steps
+
+
+def _name_of(value: Any) -> str:
+    return (value.get("name") or "") if isinstance(value, dict) else str(value or "")
+
+
+def thread_summary(thread: dict[str, Any], campaign: str) -> dict[str, Any]:
+    """The fields of a CheapSequencer inbox thread that the Replies page shows."""
+    mailbox, lead = thread.get("mailbox") or {}, thread.get("lead") or {}
+    return {
+        "id": thread["id"], "subject": thread.get("subject") or "(no subject)", "preview": thread.get("preview") or "",
+        "mailbox": mailbox.get("address") or "", "lead_email": (lead.get("email") or "").lower(), "lead_name": lead.get("name") or "",
+        "campaign": campaign or _name_of(thread.get("sequence")), "last_message_at": _when(thread.get("last_message_at")),
+        "message_count": int(thread.get("message_count") or 0), "inbound_count": int(thread.get("inbound_count") or 0),
+        "unread_count": int(thread.get("unread_count") or 0), "classification": _name_of(thread.get("reply_classification")) or None,
+    }  # fmt: skip
+
+
+def message_summary(message: dict[str, Any]) -> dict[str, Any]:
+    sender = message.get("from") or {}
+    return {
+        "id": str(message.get("id") or ""), "direction": message.get("direction") or "",
+        "from_name": sender.get("name") or "", "from_address": sender.get("address") or "",
+        "to": [t.get("address") or "" for t in message.get("to") or [] if isinstance(t, dict)],
+        "sent_at": _when(message.get("sent_at")), "subject": message.get("subject") or "",
+        "body": message.get("body_text") or message.get("preview") or "",
+    }  # fmt: skip
+
+
 # ---------- Every 30 minutes ----------
 
 

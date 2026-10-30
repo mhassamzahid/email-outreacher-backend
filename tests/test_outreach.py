@@ -11,7 +11,9 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from dependencies import get_current_user
 from services import outreach
+from tests.conftest import ADMIN
 from services.generation import FollowUpDraft
 from services.sending import SendingError, SequencerClient
 
@@ -158,6 +160,12 @@ class Sequencer:
 
     async def inboxes(self):
         return [{"id": "in1", "email": "emily@meetaheadtech360.com"}]
+
+    async def threads(self, campaign_id):
+        return self.list_threads.get(campaign_id, [])
+
+    async def thread(self, thread_id):
+        return self.detail
 
 
 class Repo:
@@ -344,3 +352,96 @@ def test_import_rows_uploads_a_csv_and_waits_for_it() -> None:
     assert [p.rsplit("/", 1)[-1] for _, p, _ in writes] == ["upload-url", "mapping-suggestion", "mapping", "process"]
     assert all(" " not in h["idempotency-key"] for _, _, h in writes)
 
+
+# ---------- Outbox and replies ----------
+
+
+@pytest.mark.parametrize(
+    ("status", "sent", "stop", "expected"),
+    [(None, 0, None, "queued"), ("active", 0, None, "queued"), ("active", 2, None, "sending"), ("stopped", 1, "replied", "replied"),
+     ("completed", 3, None, "finished"), ("removed", 1, None, "stopped"), ("paused", 1, None, "paused")],
+)  # fmt: skip
+def test_lead_state(status, sent, stop, expected) -> None:
+    assert outreach.lead_state(email(sequence_status=status, sequence_sent_count=sent, sequence_stop_reason=stop)) == expected
+
+
+def test_outbox_steps_show_generic_text_until_written() -> None:
+    first = email(status="sent", sequence_status="active", sequence_sent_count=1)
+    written = email(status="queued", body="Hi Ana, a new angle.")
+    steps = outreach.outbox_steps(first, lead(), {2: written}, {2: "Hi {{first_name}}, two.", 3: "Hi {{first_name}}, three."})
+    assert [(s.step, s.status, s.personalized) for s in steps] == [(1, "sent", True), (2, "waiting", True), (3, "waiting", False)]
+    assert steps[2].body == "Hi Ana, three." and steps[1].subject == ""
+
+    replied = email(status="sent", sequence_status="stopped", sequence_sent_count=1, sequence_stop_reason="replied")
+    assert [s.status for s in outreach.outbox_steps(replied, lead(), {}, {2: "", 3: ""})] == ["sent", "skipped", "skipped"]
+
+
+THREAD = {
+    "id": "p:in1:abc", "mailbox": {"id": "in1", "address": "emily@meetaheadtech360.com"}, "subject": "Quick idea",
+    "preview": "Sounds good", "last_message_at": "2026-11-05T15:00:00Z", "message_count": 2, "inbound_count": 1,
+    "unread_count": 1, "lead": {"email": "Ana@Shop.com", "name": None}, "sequence": {"id": "c1", "name": "Coldbrew: DTF"},
+    "reply_classification": "interested",
+}  # fmt: skip
+
+
+@pytest.fixture
+def api():
+    from fastapi.testclient import TestClient
+
+    from main import app
+    from routers import sending as router
+
+    ana = lead(email="ana@shop.com")
+    first = email(status="sent", sequencer_campaign_id="c1", sequence_status="active", sequence_sent_count=1,
+                  sequencer_inbox_email="emily@meetaheadtech360.com")  # fmt: skip
+    store = Sending([(first, ana)])
+    store.outbox = lambda ws: _value([(first, ana)])
+    store.leads_by_email = lambda ws, emails: _value({"ana@shop.com": ana})
+    seq = Sequencer([CAMPAIGN, {"id": "c9", "name": "Not ours"}])
+    seq.list_threads = {"c1": [THREAD, THREAD | {"id": "p:in1:none", "inbound_count": 0}]}
+    seq.detail = {"thread": THREAD, "messages": [
+        {"id": "m2", "direction": "inbound", "from": {"name": "Ana", "address": "ana@shop.com"}, "to": [{"address": "emily@meetaheadtech360.com"}],
+         "sent_at": "2026-11-05T15:00:00Z", "subject": "Re: Quick idea", "body_text": "Sounds good"},
+        {"id": "m1", "direction": "outbound", "from": {"address": "emily@meetaheadtech360.com"}, "to": [{"address": "ana@shop.com"}],
+         "sent_at": "2026-11-04T15:00:00Z", "subject": "Quick idea", "body_text": "Body one"},
+    ]}  # fmt: skip
+    app.dependency_overrides[router._deps] = lambda: deps(store, seq)
+    app.dependency_overrides[get_current_user] = lambda: ADMIN
+    yield TestClient(app), ana
+    app.dependency_overrides.clear()
+
+
+async def _value(v):
+    return v
+
+
+def test_outbox_lists_each_lead_with_its_mailbox_and_emails(api) -> None:
+    client, ana = api
+    [row] = client.get("/api/v1/sending/outbox").json()
+    assert (row["leadId"], row["campaign"], row["mailbox"], row["state"]) == (str(ana.id), "Coldbrew: DTF", "emily@meetaheadtech360.com", "sending")
+    assert [s["status"] for s in row["steps"]] == ["sent", "waiting", "waiting"]
+    assert row["steps"][1]["body"] == "Hi Ana, bumping this." and row["steps"][1]["personalized"] is False
+
+
+def test_replies_list_only_conversations_where_the_lead_wrote_back(api) -> None:
+    client, ana = api
+    [t] = client.get("/api/v1/sending/replies").json()
+    assert (t["id"], t["leadName"], t["leadId"], t["campaign"], t["classification"]) == ("p:in1:abc", "Ana Ruiz", str(ana.id), "Coldbrew: DTF", "interested")
+
+
+def test_a_reply_thread_reads_oldest_first(api) -> None:
+    client, _ = api
+    d = client.get("/api/v1/sending/replies/p:in1:abc").json()
+    assert [m["direction"] for m in d["messages"]] == ["outbound", "inbound"]
+    assert d["messages"][1]["body"] == "Sounds good" and d["messages"][1]["to"] == ["emily@meetaheadtech360.com"]
+
+
+def test_a_thread_outside_coldbrew_campaigns_is_not_shown(api) -> None:
+    client, _ = api
+    from routers import sending as router
+    from main import app
+
+    seq = Sequencer([CAMPAIGN])
+    seq.detail = {"thread": THREAD | {"sequence": {"id": "c9"}}, "messages": []}
+    app.dependency_overrides[router._deps] = lambda: deps(Sending([]), seq)
+    assert client.get("/api/v1/sending/replies/p:in1:abc").status_code == 404

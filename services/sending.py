@@ -13,6 +13,7 @@ import asyncio
 import csv
 import io
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -111,6 +112,25 @@ class SequencerClient(_Client):
     async def inboxes(self) -> list[dict[str, Any]]:
         """The sending mailboxes (id, email, display_name...)."""
         return await self.all("/inboxes")
+
+    async def threads(self, campaign_id: str) -> list[dict[str, Any]]:
+        """A campaign's conversations in the unified inbox, newest first (WarmUp mail left out)."""
+        rows: list[dict[str, Any]] = []
+        cursor = None
+        for _ in range(10):
+            body = await self.get("/inbox/threads", sequence_id=campaign_id, include_warmup="false", limit=100,
+                                  **({"cursor": cursor} if cursor else {}))  # fmt: skip
+            rows += body.get("data") or []
+            meta = body.get("meta") or {}
+            cursor = meta.get("next_cursor")
+            if not meta.get("has_more") or not cursor:
+                break
+        return rows
+
+    async def thread(self, thread_id: str) -> dict[str, Any]:
+        """One conversation and its messages. Reading it doesn't mark it read."""
+        body = await self.get(f"/inbox/threads/{quote(thread_id, safe='')}")
+        return body.get("data") or body
 
     # ---- Writes: never activate, never send. ----
 

@@ -509,6 +509,26 @@ class SendingRepo:
     async def commit(self) -> None:
         await self.session.commit()
 
+    async def outbox(self, workspace_id: UUID, limit: int = 2000) -> list[tuple[Email, Lead]]:
+        """Every first email Coldbrew put into a campaign, newest first."""
+        query = (
+            select(Email, Lead)
+            .join(Lead, Lead.id == Email.lead_id)
+            .where(Email.workspace_id == workspace_id, Email.step == 1, Email.sequencer_campaign_id.is_not(None))
+            .order_by(Email.queued_at.desc().nulls_last())
+            .limit(limit)
+        )
+        return [(e, lead) for e, lead in await self.session.execute(query)]
+
+    async def leads_by_email(self, workspace_id: UUID, emails: list[str]) -> dict[str, Lead]:
+        """The workspace's leads with these email addresses, by lowercased address."""
+        if not emails:
+            return {}
+        rows = await self.session.scalars(
+            select(Lead).where(Lead.workspace_id == workspace_id, func.lower(Lead.email).in_([e.lower() for e in emails]))
+        )
+        return {(lead.email or "").lower(): lead for lead in rows}
+
     async def queued_counts(self, workspace_id: UUID) -> dict[str, int]:
         """Leads queued into each CheapSequencer campaign."""
         query = (
