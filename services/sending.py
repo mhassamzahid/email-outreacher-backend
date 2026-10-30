@@ -22,6 +22,9 @@ SEQUENCER_URL = "https://api.cheapsequencer.com/v1"
 INBOXES_URL = "https://api.cheapinboxes.com"
 
 
+# How long to wait before trying a read again after the connection couldn't be made.
+RETRY_AFTER_SECONDS = 1.0
+
 class SendingError(Exception):
     def __init__(self, message: str, status: int | None = None) -> None:
         super().__init__(message)
@@ -54,11 +57,22 @@ class _Client:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def _read(self, path: str, params: dict[str, Any] | None = None) -> httpx.Response:
+        """A GET, tried once more when the connection couldn't be made at all (a network blip): nothing
+        reached the service, so trying again can't do anything twice. Writes are never retried here."""
+        for attempt in range(2):
+            try:
+                return await self._client.get(path, params=params or None)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if attempt:
+                    raise SendingError(f"Couldn't reach {self.service}: {exc.__class__.__name__}") from exc
+                await asyncio.sleep(RETRY_AFTER_SECONDS)
+            except httpx.HTTPError as exc:
+                raise SendingError(f"Couldn't reach {self.service}: {exc.__class__.__name__}") from exc
+        raise AssertionError("unreachable")
+
     async def get(self, path: str, **params: Any) -> Any:
-        try:
-            response = await self._client.get(path, params=params or None)
-        except httpx.HTTPError as exc:
-            raise SendingError(f"Couldn't reach {self.service}: {exc.__class__.__name__}") from exc
+        response = await self._read(path, params)
         if response.status_code >= 400:
             raise SendingError(_message(self.service, response), response.status_code)
         return response.json()
@@ -98,10 +112,7 @@ class SequencerClient(_Client):
 
     async def campaign(self, campaign_id: str) -> tuple[dict[str, Any], str]:
         """A campaign with its steps, and its ETag for an update."""
-        try:
-            response = await self._client.get(f"/campaigns/{campaign_id}")
-        except httpx.HTTPError as exc:
-            raise SendingError(f"Couldn't reach {self.service}: {exc.__class__.__name__}") from exc
+        response = await self._read(f"/campaigns/{campaign_id}")
         if response.status_code >= 400:
             raise SendingError(_message(self.service, response), response.status_code)
         body = response.json().get("data") or {}

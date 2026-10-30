@@ -123,3 +123,21 @@ def test_a_change_clears_it_before_its_answer_arrives(cached) -> None:
         r = client.post("/api/v1/things", headers=h())
     assert r.status_code == 200 and seen == [1]  # cleared exactly once, while answering
     assert client.get("/api/v1/things", headers=h()).json() == {"reads": 2}
+
+
+def test_an_answer_reporting_a_failure_is_never_kept(cached) -> None:
+    client, calls = cached
+    from fastapi.routing import APIRoute
+
+    app = client.app
+
+    @app.get("/api/v1/flaky")
+    def flaky():
+        calls["reads"] += 1
+        return {"items": [], "errors": ["Couldn't reach CheapSequencer: ConnectError"]}
+
+    # Routes added after the first request still work in FastAPI; the middleware stack is already built.
+    assert any(isinstance(r, APIRoute) and r.path == "/api/v1/flaky" for r in app.routes)
+    client.get("/api/v1/flaky", headers=h())
+    client.get("/api/v1/flaky", headers=h())
+    assert calls["reads"] == 2

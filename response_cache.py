@@ -13,6 +13,7 @@ reaches another within RESPONSE_CACHE_SECONDS.
 """
 
 import hashlib
+import json
 import time
 from collections import OrderedDict
 
@@ -36,6 +37,16 @@ def clear() -> None:
     global _version
     _version += 1
     _entries.clear()
+
+
+def _reports_failure(body: bytes) -> bool:
+    """An answer that says an outside service failed (`error` or `errors` filled in, as on Mailboxes when
+    CheapSequencer can't be reached) is never kept: the next read should try again, not repeat the failure."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return True
+    return isinstance(data, dict) and bool(data.get("error") or data.get("errors"))
 
 
 class ResponseCache:
@@ -100,7 +111,7 @@ class ResponseCache:
             content_type = dict(start.get("headers", [])).get(b"content-type", b"")
             body = b"".join(chunks)
             # Only a clean JSON answer, and only if nothing changed while it was being made.
-            if start.get("status") == 200 and content_type.startswith(b"application/json") and len(body) <= MAX_BODY and version == _version:
+            if start.get("status") == 200 and content_type.startswith(b"application/json") and len(body) <= MAX_BODY and version == _version and not _reports_failure(body):
                 _entries[key] = (time.monotonic(), content_type, body)
                 if len(_entries) > MAX_ENTRIES:
                     _entries.popitem(last=False)
