@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     celery_broker_url: str | None = None
     # How often beat starts the follow-up check, in seconds.
     followup_check_seconds: int = Field(default=1800, ge=60)
+    # The longest a background job (research, writing emails, fetching posts...) may run before it's stopped.
+    job_time_limit_seconds: int = Field(default=3600, ge=60)
 
     @property
     def auth_issuer(self) -> str:

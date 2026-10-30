@@ -29,7 +29,17 @@ celery -A celery_app beat --loglevel=info
 Run exactly one beat, or every check is scheduled twice. A Redis lock stops two checks overlapping, and
 a check still queued when the next one is due is dropped. Without Redis, `CELERY_BROKER_URL=filesystem://`
 works for local development only (on Windows, `pip install pywin32` first). "Check follow-ups now" on the
-Mailboxes page runs the same check right away, through the API.
+Mailboxes page runs the same check right away, as a background job.
+
+The worker also runs every long-running action: finding companies, research, finding people, revealing
+emails, fetching posts, writing emails and follow-ups, improving a prompt, queueing and syncing campaigns
+(`background.LONG_RUNNING`). The page starts one with `POST /api/v1/jobs` and checks `GET /api/v1/jobs/{id}`
+until it's done; calling those endpoints directly answers 409. The worker runs the same endpoint as the
+person who started it, so their role and workspace access apply. A job runs at most
+`JOB_TIME_LIMIT_SECONDS` (an hour) and is never retried on its own, so a crash can't pay twice. Without a
+running worker, jobs wait in the queue and the page says so after a minute. Give the worker
+`--concurrency=2` or more so a long research run doesn't hold up everyone else's jobs (`--pool=solo` on
+Windows runs one at a time).
 
 ## Database
 

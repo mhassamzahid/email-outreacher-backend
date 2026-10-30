@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dependencies import (
-    get_current_user, get_exclusion_repo, get_icp_campaign_repo, get_icp_profile_repo, get_lead_intel_repo, get_optional_apify, get_optional_inboxes, get_optional_sequencer,
+    get_current_user, get_exclusion_repo, get_icp_campaign_repo, get_icp_profile_repo, get_lead_intel_repo, get_optional_apify, get_optional_inboxes, get_optional_sequencer, refuse_inline,
     get_workspace_company_repo, require_api_secret,
 )  # fmt: skip
 from main import app
@@ -190,8 +190,10 @@ def no_real_sending(monkeypatch):
     app.dependency_overrides[get_icp_campaign_repo] = lambda: links
     # The frontend-server secret is tested on its own (tests/test_api_secret.py); other tests skip it.
     app.dependency_overrides[require_api_secret] = lambda: None
+    # Long-running endpoints only run as background jobs (tests/test_jobs.py); other tests call them directly.
+    app.dependency_overrides[refuse_inline] = lambda: None
     yield links
-    for dep in (get_optional_sequencer, get_optional_inboxes, get_optional_apify, get_icp_campaign_repo, require_api_secret):
+    for dep in (get_optional_sequencer, get_optional_inboxes, get_optional_apify, get_icp_campaign_repo, require_api_secret, refuse_inline):
         app.dependency_overrides.pop(dep, None)
 
 

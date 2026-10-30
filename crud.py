@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
     Company, CompanyPage, Email, EmailFeedback, ExampleEmail, IcpCampaign, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
-    Exclusion, User, Workspace, WorkspaceCompany, WorkspaceMember, FALLBACK_2, FALLBACK_3,
+    Exclusion, Job, User, Workspace, WorkspaceCompany, WorkspaceMember, FALLBACK_2, FALLBACK_3,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
 from services.cost_estimate import DEFAULT_ESTIMATE, upgrade as upgrade_estimate
@@ -1617,4 +1617,37 @@ class ExampleRepo:
 
     async def delete(self, row: ExampleEmail) -> None:
         await self.session.delete(row)
+        await self.session.commit()
+
+
+class JobRepo:
+    """Background jobs (research, writing emails, fetching posts...) and their results. `outreach.eo_jobs`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, workspace_id: UUID, user_id: UUID, kind: str, label: str, params: dict[str, Any]) -> Job:
+        job = Job(workspace_id=workspace_id, created_by=user_id, kind=kind, label=label, params=params, status="queued")
+        self.session.add(job)
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
+
+    async def get(self, job_id: UUID) -> Job | None:
+        return await self.session.get(Job, job_id)
+
+    async def start(self, job_id: UUID) -> Job | None:
+        """Claim a queued job for this worker; None when it isn't queued (already run, or claimed by another)."""
+        claimed = await self.session.scalar(
+            update(Job).where(Job.id == job_id, Job.status == "queued")
+            .values(status="running", started_at=func.now(), updated_at=func.now()).returning(Job.id)
+        )  # fmt: skip
+        await self.session.commit()
+        return await self.session.get(Job, job_id, populate_existing=True) if claimed else None
+
+    async def finish(self, job_id: UUID, status: str, result: dict[str, Any] | None, detail: str | None) -> None:
+        await self.session.execute(
+            update(Job).where(Job.id == job_id)
+            .values(status=status, result=result, detail=detail, finished_at=func.now(), updated_at=func.now())
+        )  # fmt: skip
         await self.session.commit()

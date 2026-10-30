@@ -3,7 +3,9 @@
 import asyncio
 import logging
 from dataclasses import asdict
+from uuid import UUID
 
+import background
 import jobs
 from celery_app import app
 from config import get_settings
@@ -43,3 +45,14 @@ def check_follow_ups() -> dict:
                 lock.release()
             except Exception:  # noqa: BLE001 - it expired already
                 pass
+
+
+_limit = get_settings().job_time_limit_seconds
+
+
+# Never acknowledged late, so a worker that dies mid-job doesn't hand it to another: running it twice could
+# pay twice. The job shows as failed instead (routers/jobs.py) and is started again by hand.
+@app.task(name="coldbrew.run_job", acks_late=False, soft_time_limit=_limit, time_limit=_limit + 60)
+def run_job(job_id: str) -> None:
+    """One background job: a long-running endpoint, run as the person who started it (background.py)."""
+    asyncio.run(background.run_job(UUID(job_id)))

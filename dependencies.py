@@ -1,6 +1,6 @@
 import hmac
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 import anthropic
 from uuid import UUID
@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+from background import LONG_RUNNING, current_job
 from config import get_settings, origin_of
 from crud import (
     CompanyRepo,
@@ -17,6 +18,7 @@ from crud import (
     IcpCampaignRepo,
     FeedbackRepo,
     IcpProfileRepo,
+    JobRepo,
     LeadRepo,
     PostRepo,
     ProductRepo,
@@ -66,6 +68,8 @@ async def require_api_secret(request: Request) -> None:
     """Only Coldbrew's own frontend server may call the API: it sends API_SECRET in X-Coldbrew-Secret,
     and a request that carries an Origin or Referer must come from one of AUTHORIZED_URLS. Runs before
     sign-in, so a stranger's request is refused without touching Supabase or the database."""
+    if current_job.get() is not None:
+        return  # a background job, run in-process by the worker (background.py): no browser involved
     settings = get_settings()
     if not settings.api_secret:
         raise HTTPException(status_code=503, detail="The API isn't configured: API_SECRET is not set.")
@@ -93,7 +97,10 @@ async def get_current_user(
     authorization: str | None = Header(default=None), users: UserRepo = Depends(get_user_repo)
 ) -> CurrentUser:
     """The signed-in person, from the Supabase access token in `Authorization: Bearer`. Every API
-    route except health depends on this."""
+    route except health depends on this. A background job runs as the person who started it."""
+    job = current_job.get()
+    if job is not None:
+        return job.user
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail="Sign in to continue.")
@@ -113,6 +120,25 @@ async def get_current_user(
         _sign_ins.clear()
     _sign_ins[claims.auth_user_id] = (time.monotonic(), current)
     return current
+
+
+async def refuse_inline(request: Request) -> None:
+    """Long-running endpoints (background.LONG_RUNNING) only run in the worker: a request holding them open
+    for minutes is what made pages hang. Start them with POST /jobs instead."""
+    path = request.url.path.removeprefix("/api/v1")
+    if request.method == "POST" and path in LONG_RUNNING and current_job.get() is None:
+        raise HTTPException(status_code=409, detail=f"{LONG_RUNNING[path]} runs in the background: start it with POST /api/v1/jobs.")
+
+
+def get_job_queue() -> Callable[[UUID], None]:
+    """Hands a job to the Celery worker. Raises when the broker (Redis) can't be reached."""
+    from tasks import run_job
+
+    return lambda job_id: run_job.apply_async(args=[str(job_id)], retry=False)
+
+
+def get_job_repo(session: AsyncSession = Depends(get_session)) -> JobRepo:
+    return JobRepo(session)
 
 
 def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:

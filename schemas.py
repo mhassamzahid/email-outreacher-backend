@@ -1276,3 +1276,33 @@ class LeadMoveIn(LeadIdsIn):
 
 class LeadsChanged(ApiModel):
     changed: int
+
+
+# ---------- Background jobs (background.py) ----------
+
+
+class JobIn(ApiModel):
+    # A long-running endpoint under /api/v1, like "/pipeline/research" (background.LONG_RUNNING).
+    path: str = Field(max_length=100)
+    # Its request body, exactly as the endpoint takes it.
+    body: Any = None
+
+
+JobStatus = Literal["queued", "running", "done", "failed", "cancelled"]
+
+
+class JobOut(ApiModel):
+    id: UUID
+    kind: str
+    label: str
+    status: JobStatus
+    # What's happening now, in words: "Waiting for a worker", say.
+    step: str | None = None
+    # Why it failed.
+    detail: str | None = None
+    # The endpoint's answer once finished: its status code and its body, as a request would have had them.
+    status_code: int | None = None
+    result: Any = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None

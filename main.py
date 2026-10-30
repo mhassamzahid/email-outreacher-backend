@@ -4,19 +4,20 @@ from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
-from dependencies import get_current_user, require_api_secret
+from dependencies import get_current_user, refuse_inline, require_api_secret
 from routers import (
-    companies, emails, examples, exclusions, health, icps, improve, leads, mailboxes, pipeline, posts, products, prompts,
+    companies, emails, examples, exclusions, health, icps, improve, jobs, leads, mailboxes, pipeline, posts, products, prompts,
     sending, settings, sources, stakeholders, usage, users, workspaces,
 )  # fmt: skip
 
 
 # Every feature router is included here, under /api/v1. Only health is open. The rest need, in order,
 # the shared API secret from the frontend's server and an allowed origin (dependencies.require_api_secret),
-# then a signed-in Supabase session (dependencies.get_current_user).
+# then a signed-in Supabase session (dependencies.get_current_user). Long-running endpoints only run as
+# background jobs (background.py, dependencies.refuse_inline).
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
-protected = APIRouter(dependencies=[Depends(require_api_secret), Depends(get_current_user)])
+protected = APIRouter(dependencies=[Depends(require_api_secret), Depends(get_current_user), Depends(refuse_inline)])
 protected.include_router(users.router)
 protected.include_router(icps.router)
 protected.include_router(companies.router)
@@ -36,6 +37,7 @@ protected.include_router(exclusions.router)
 protected.include_router(mailboxes.router)
 protected.include_router(sending.router)
 protected.include_router(sources.router)
+protected.include_router(jobs.router)
 api_router.include_router(protected)
 
 
