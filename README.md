@@ -42,7 +42,12 @@ Supabase Auth, email and password. There's no sign-up: accounts are made, and pa
 Supabase dashboard (Authentication > Users). Signed in, anyone can change their own password from the
 sidebar. It's the shared Supabase account, so the change applies to Lead Intel too.
 
-Every route except health needs `Authorization: Bearer <Supabase access token>`, checked against the
+Every route except health is only for Coldbrew's own frontend server. It must send `X-Coldbrew-Secret`
+matching `API_SECRET` (with no `API_SECRET` set, the API refuses everything), and a request carrying an
+`Origin` or `Referer` must come from one of `AUTHORIZED_URLS`. The browser never calls the API directly:
+the frontend's `app/api/v1` route forwards each call and adds the secret on its server.
+
+Then it needs `Authorization: Bearer <Supabase access token>`, checked against the
 project's public keys (`SUPABASE_JWKS_URL`, or the standard address under `SUPABASE_URL`). Supabase Auth
 is shared with Lead Intel, so any account there can sign in; what it can do here comes from
 `eo_users`: a first sign-in is added as Sales with no workspaces until an admin gives them some.
@@ -161,4 +166,5 @@ tests/
 ## Deploy (Railway)
 
 `railway.json` sets the start command and the `/health` healthcheck. Set the variables from
-`.env.example` on the Railway service, including `CORS_ORIGINS` with the Vercel URL.
+`.env.example` on the Railway service, including `AUTHORIZED_URLS` with the Vercel URL and `API_SECRET`
+(the same value as the frontend's).

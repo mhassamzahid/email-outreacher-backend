@@ -17,8 +17,13 @@ class Settings(BaseSettings):
     app_name: str = "Coldbrew API"
     environment: str = "development"
 
-    # Comma-separated origins allowed to call the API (the Next.js frontend).
-    cors_origins: str = Field(default="http://localhost:3000")
+    # The only callers allowed: comma-separated origins of the frontend (scheme, host and port, like
+    # https://app.example.com). A request whose Origin or Referer isn't one of these is refused, and
+    # CORS allows only these. Empty means none: every browser-originated request is refused.
+    authorized_urls: str = Field(default="")
+    # Shared secret the frontend's server sends in X-Coldbrew-Secret with every API call. Without it set,
+    # the API refuses everything (except /health), so a missing setting never leaves it open.
+    api_secret: str | None = None
 
     # Shared Lead Intel database (Supabase Postgres).
     database_url: str | None = None
@@ -63,8 +68,18 @@ class Settings(BaseSettings):
         return self.supabase_jwks_url or f"{self.auth_issuer}/.well-known/jwks.json"
 
     @property
-    def cors_origin_list(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+    def authorized_url_list(self) -> list[str]:
+        return [o for o in (origin_of(u) for u in self.authorized_urls.split(",")) if o]
+
+
+def origin_of(url: str | None) -> str | None:
+    """scheme://host[:port] of a URL, lowercased, or None when it isn't one ("null", blank, a bare path)."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit((url or "").strip())
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}".lower()
 
 
 @lru_cache

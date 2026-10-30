@@ -9,18 +9,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import jobs
 from config import get_settings
-from dependencies import get_current_user
+from dependencies import get_current_user, require_api_secret
 from routers import (
     companies, emails, examples, exclusions, health, icps, improve, leads, mailboxes, pipeline, posts, products, prompts,
     sending, settings, stakeholders, usage, users, workspaces,
 )  # fmt: skip
 
 
-# Every feature router is included here, under /api/v1. Only health is open: the rest need a signed-in
-# Supabase session (see dependencies.get_current_user).
+# Every feature router is included here, under /api/v1. Only health is open. The rest need, in order,
+# the shared API secret from the frontend's server and an allowed origin (dependencies.require_api_secret),
+# then a signed-in Supabase session (dependencies.get_current_user).
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
-protected = APIRouter(dependencies=[Depends(get_current_user)])
+protected = APIRouter(dependencies=[Depends(require_api_secret), Depends(get_current_user)])
 protected.include_router(users.router)
 protected.include_router(icps.router)
 protected.include_router(companies.router)
@@ -61,7 +62,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origin_list,
+        allow_origins=settings.authorized_url_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

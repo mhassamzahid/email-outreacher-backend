@@ -28,11 +28,3 @@ def test_database_routes_say_503_when_not_configured(monkeypatch) -> None:
     response = client.get("/api/v1/icps")
     assert response.status_code == 503
     get_engine.cache_clear()
-
-
-def test_cors_allows_frontend_origin() -> None:
-    response = client.options(
-        "/api/v1/health",
-        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
-    )
-    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"

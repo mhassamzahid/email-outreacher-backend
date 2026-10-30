@@ -1,12 +1,13 @@
+import hmac
 from collections.abc import AsyncIterator
 
 import anthropic
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
-from config import get_settings
+from config import get_settings, origin_of
 from crud import (
     CompanyRepo,
     EmailRepo,
@@ -55,6 +56,25 @@ def get_exclusion_repo(session: AsyncSession = Depends(get_session)) -> Exclusio
 
 def get_user_repo(session: AsyncSession = Depends(get_session)) -> UserRepo:
     return UserRepo(session)
+
+
+SECRET_HEADER = "x-coldbrew-secret"
+
+
+async def require_api_secret(request: Request) -> None:
+    """Only Coldbrew's own frontend server may call the API: it sends API_SECRET in X-Coldbrew-Secret,
+    and a request that carries an Origin or Referer must come from one of AUTHORIZED_URLS. Runs before
+    sign-in, so a stranger's request is refused without touching Supabase or the database."""
+    settings = get_settings()
+    if not settings.api_secret:
+        raise HTTPException(status_code=503, detail="The API isn't configured: API_SECRET is not set.")
+    sent = request.headers.get(SECRET_HEADER, "")
+    if not hmac.compare_digest(sent.encode(), settings.api_secret.encode()):
+        raise HTTPException(status_code=401, detail="Not authorized.")
+    for header in ("origin", "referer"):
+        value = request.headers.get(header)
+        if value and origin_of(value) not in settings.authorized_url_list:
+            raise HTTPException(status_code=403, detail="Not authorized.")
 
 
 async def get_current_user(
