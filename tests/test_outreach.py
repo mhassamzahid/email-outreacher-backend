@@ -347,6 +347,7 @@ def test_import_rows_uploads_a_csv_and_waits_for_it() -> None:
             assert body["list_id"] == "list-1" and body["content_type"] == "text/csv"
             return httpx.Response(201, json={"data": {"import": {"id": "imp1"}, "upload": {"url": "https://up.example/x", "method": "PUT"}}})
         if request.url.host == "up.example":
+            assert "authorization" not in request.headers  # the API key never goes to the storage host
             rows = list(csv.DictReader(io.StringIO(request.content.decode())))
             assert rows == [{"email": "a@x.com", "email_2_body": "Hi, line one\nline two"}]
             return httpx.Response(200)

@@ -46,6 +46,7 @@ class _Client:
     service = ""
 
     def __init__(self, base_url: str, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._transport = transport
         self._client = httpx.AsyncClient(
             base_url=base_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=30, transport=transport
         )
@@ -178,8 +179,11 @@ class SequencerClient(_Client):
                                {"list_id": list_id, "filename": "coldbrew.csv", "content_type": "text/csv", "size_bytes": len(data)})  # fmt: skip
         upload, import_id = up["upload"], up["import"]["id"]
         try:
-            put = await self._client.request(upload.get("method", "PUT"), upload["url"], content=data,
-                                             headers=up.get("headers") or {"Content-Type": "text/csv"})  # fmt: skip
+            # The signed upload URL is its own credential, on a storage host that isn't CheapSequencer: a
+            # client with no default headers, so our API key never goes there (the host also refuses it).
+            async with httpx.AsyncClient(timeout=60, transport=self._transport) as storage:
+                put = await storage.request(upload.get("method", "PUT"), upload["url"], content=data,
+                                            headers=up.get("headers") or {"Content-Type": "text/csv"})  # fmt: skip
         except httpx.HTTPError as exc:
             raise SendingError(f"Couldn't upload the CSV to CheapSequencer: {exc.__class__.__name__}") from exc
         if put.status_code >= 400:
