@@ -299,6 +299,9 @@ class MailboxOut(ApiModel):
     needs_attention: bool
     last_error: str | None
     tags: list[str]
+    # When CheapSequencer last read the inbox (how replies are found), and whether that's too long ago.
+    last_synced_at: str | None = None
+    sync_stale: bool = False
     campaign_daily: int
     warmup_daily: int
     total_daily: int

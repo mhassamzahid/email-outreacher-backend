@@ -6,6 +6,7 @@ shows what the other one returned and says why the rest is missing.
 """
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -17,18 +18,36 @@ from services.sending import InboxesClient, SendingError, SequencerClient
 router = APIRouter(tags=["mailboxes"])
 
 
-def _mailbox(row: dict[str, Any]) -> MailboxOut:
+# CheapSequencer finds replies by syncing each mailbox's inbox. Older than this, replies there are missed.
+SYNC_STALE_HOURS = 2
+
+
+def _sync_age_hours(synced_at: str | None, now: datetime) -> float | None:
+    if not synced_at:
+        return None
+    try:
+        return (now - datetime.fromisoformat(synced_at.replace("Z", "+00:00"))).total_seconds() / 3600
+    except ValueError:
+        return None
+
+
+def _mailbox(row: dict[str, Any], synced_at: str | None, now: datetime) -> MailboxOut:
     limits = row.get("send_limits") or {}
     warm = row.get("warmup") or {}
     today = row.get("today") or {}
     error = (row.get("health") or {}).get("last_error_message")
+    age = _sync_age_hours(synced_at, now)
+    stale = age is None or age > SYNC_STALE_HOURS
+    if stale and not error:
+        error = ("CheapSequencer has never read this inbox" if age is None else
+                 f"CheapSequencer last read this inbox {age:.0f} hours ago") + ", so replies here aren't being picked up."  # fmt: skip
     status, auth = row.get("status"), row.get("auth_status")
     return MailboxOut(
         id=row["id"], email=row.get("email") or "", name=row.get("display_name") or "",
         domain=(row.get("email") or "").split("@")[-1], provider=row.get("provider") or "",
         status=status or "unknown", auth_status=auth or "unknown",
         needs_attention=bool(error) or status != "connected" or auth not in (None, "ok"),
-        last_error=error, tags=row.get("tags") or [],
+        last_error=error, tags=row.get("tags") or [], last_synced_at=synced_at, sync_stale=stale,
         campaign_daily=limits.get("sequence_daily") or 0, warmup_daily=limits.get("warmup_daily") or 0,
         total_daily=limits.get("total_daily") or 0,
         warmup_enabled=bool(warm.get("enabled")), warmup_state=warm.get("state"),
@@ -61,6 +80,7 @@ async def mailboxes(
 ) -> MailboxesOut:
     errors: list[str] = []
     rows: list[dict[str, Any]] = []
+    synced: dict[str, str | None] = {}
     usage: dict[str, Any] = {}
     warmup: dict[str, Any] = {}
     campaigns: list[dict[str, Any]] = []
@@ -70,9 +90,10 @@ async def mailboxes(
         errors.append("CHEAPSEQUENCER_API_KEY is not set, so the mailboxes can't be read.")
     else:
         try:
-            rows, usage, warmup, campaigns = await asyncio.gather(
-                sequencer.warmup_inboxes(), sequencer.usage(), sequencer.warmup(), sequencer.campaigns()
+            rows, usage, warmup, campaigns, inbox_rows = await asyncio.gather(
+                sequencer.warmup_inboxes(), sequencer.usage(), sequencer.warmup(), sequencer.campaigns(), sequencer.inboxes()
             )
+            synced = {r["id"]: (r.get("sync") or {}).get("last_synced_at") for r in inbox_rows if r.get("id")}
         except SendingError as exc:
             errors.append(exc.message)
     if inboxes is None:
@@ -98,9 +119,14 @@ async def mailboxes(
         warmup_week_spam=week.get("spam_count") or 0, warmup_week_saved=week.get("saved_from_spam_count") or 0,
         needing_review=today.get("inboxes_needing_review") or 0,
     )  # fmt: skip
+    now = datetime.now(UTC)
+    boxes = sorted((_mailbox(r, synced.get(r["id"]), now) for r in rows), key=lambda m: (m.domain, m.email))
+    if stale := [m for m in boxes if m.sync_stale]:
+        errors.append(f"CheapSequencer hasn't read the inbox of {len(stale)} of {len(boxes)} mailboxes in over {SYNC_STALE_HOURS} hours, "
+                      "so replies there aren't being detected and those leads can still get follow-ups. Contact CheapSequencer support.")  # fmt: skip
     return MailboxesOut(
         summary=summary,
-        mailboxes=sorted((_mailbox(r) for r in rows), key=lambda m: (m.domain, m.email)),
+        mailboxes=boxes,
         domains=domains,
         campaigns=[CampaignBrief(name=c.get("name") or "", status=c.get("status") or "", daily_send_cap=c.get("daily_send_cap")) for c in campaigns],
         errors=errors,

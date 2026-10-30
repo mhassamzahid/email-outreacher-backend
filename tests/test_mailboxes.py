@@ -1,6 +1,7 @@
 """The mailboxes page: CheapSequencer and CheapInboxes faked over HTTP. No network, no cost."""
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -29,6 +30,11 @@ def sequencer(request: httpx.Request) -> httpx.Response:
                             "auth_status": "reauth_required", "health": {"last_error_message": "Token expired"}}  # fmt: skip
             return httpx.Response(200, json={"data": [broken], "meta": {"has_more": False}})
         return httpx.Response(200, json={"data": [ROW], "meta": {"has_more": True, "next_cursor": "c2"}})
+    if path.endswith("/v1/inboxes"):
+        # Emily's inbox was read a few minutes ago; James's one hasn't been read for 13 hours.
+        fresh, old = (datetime.now(UTC) - timedelta(minutes=5)).isoformat(), (datetime.now(UTC) - timedelta(hours=13)).isoformat()
+        return httpx.Response(200, json={"data": [{"id": "i1", "sync": {"last_synced_at": fresh}},
+                                                  {"id": "i2", "sync": {"last_synced_at": SYNC.get("i2", old)}}], "meta": {}})  # fmt: skip
     if path.endswith("/usage"):
         return httpx.Response(200, json={"data": {"sends": {"used": 0, "limit": 10000}, "connected_inboxes": {"used": 2, "limit": 500},
                                                   "billing_period": {"ends_at": "2026-11-29T12:30:35Z"}}})  # fmt: skip
@@ -38,6 +44,9 @@ def sequencer(request: httpx.Request) -> httpx.Response:
     if path.endswith("/campaigns"):
         return httpx.Response(200, json={"data": [{"name": "Coldbrew: DTF", "status": "draft", "daily_send_cap": 48}], "meta": {}})
     return httpx.Response(404, json={"error": {"message": "nope"}})
+
+
+SYNC: dict[str, str] = {}
 
 
 def inboxes(request: httpx.Request) -> httpx.Response:
@@ -55,7 +64,7 @@ def test_mailboxes_page(client) -> None:
     app.dependency_overrides[get_optional_sequencer] = lambda: SequencerClient("k", transport=httpx.MockTransport(sequencer))
     app.dependency_overrides[get_optional_inboxes] = lambda: InboxesClient("k", transport=httpx.MockTransport(inboxes))
     d = client.get("/api/v1/mailboxes").json()
-    assert d["errors"] == []
+    assert len(d["errors"]) == 1 and "1 of 2 mailboxes" in d["errors"][0]  # James's inbox isn't being read
     emily, james = d["mailboxes"]
     assert (emily["name"], emily["campaignDaily"], emily["warmupState"], emily["todaySpam"], emily["needsAttention"]) == ("Emily Carter", 18, "warming", 1, False)
     assert james["needsAttention"] and james["lastError"] == "Token expired"
@@ -78,3 +87,13 @@ def test_a_rejected_key_says_so(client) -> None:
     d = client.get("/api/v1/mailboxes").json()
     assert d["errors"][0] == "CheapSequencer rejected the API key. Check it in the backend's .env."
     json.dumps(d)
+
+
+def test_a_mailbox_whose_inbox_isnt_read_is_flagged(client) -> None:
+    app.dependency_overrides[get_optional_sequencer] = lambda: SequencerClient("k", transport=httpx.MockTransport(sequencer))
+    app.dependency_overrides[get_optional_inboxes] = lambda: None
+    d = client.get("/api/v1/mailboxes").json()
+    emily, james = d["mailboxes"]
+    assert not emily["syncStale"] and james["syncStale"] and james["needsAttention"]
+    assert james["lastError"] == "Token expired"  # its own error comes first
+    assert any("hasn't read the inbox of 1 of 2 mailboxes" in e for e in d["errors"])
