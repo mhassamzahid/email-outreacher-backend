@@ -3,7 +3,8 @@
 CheapSequencer sends the campaigns through 16 Google mailboxes and keeps them warmed up; CheapInboxes
 sells and runs those mailboxes and their domains. CheapInboxes is only read. CheapSequencer is read, and
 written in exactly these ways: lists, CSV imports of leads (with each lead's emails in custom fields),
-enrolling a list into a campaign, and the step text of a draft or paused campaign. Nothing here can
+enrolling a list into a campaign, the step text and name of a draft or paused campaign, a draft copy
+of a campaign for a new ICP, and archiving the campaign of an archived or deleted ICP once it's empty. Nothing here can
 activate a campaign or send an email: that stays a person's decision in CheapSequencer.
 
 Docs: https://docs.cheapsequencer.com/llms.txt and https://api.cheapinboxes.com/v1/openapi.json.
@@ -203,6 +204,10 @@ class SequencerClient(_Client):
     async def rename(self, campaign_id: str, name: str, etag: str, key: str) -> dict[str, Any]:
         """Rename a draft or paused campaign."""
         return await self._write("PATCH", f"/campaigns/{campaign_id}", key, {"name": name[:200]}, etag)
+
+    async def archive(self, campaign_id: str, etag: str, key: str) -> None:
+        """Archive a campaign (CheapSequencer keeps its history). Only called once no lead is left in it."""
+        await self._write("DELETE", f"/campaigns/{campaign_id}", key, None, etag)
 
     async def set_steps(self, campaign_id: str, steps: list[dict[str, Any]], etag: str, key: str) -> dict[str, Any]:
         """Replace a draft or paused campaign's step copy (ids echoed, so the steps are kept)."""

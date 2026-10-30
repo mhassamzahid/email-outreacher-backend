@@ -37,6 +37,29 @@ class IcpCampaignRepo:
             row.campaign_id = campaign_id
         await self.session.commit()
 
+    async def unlink(self, icp_id: UUID) -> None:
+        await self.session.execute(delete(IcpCampaign).where(IcpCampaign.lead_intel_icp_id == icp_id))
+        await self.session.commit()
+
+    async def usage(self, icp_id: UUID) -> dict[str, int]:
+        """What in Coldbrew, in any workspace, still belongs to the ICP. Deleting it would orphan these."""
+        counts = {}
+        for label, model, column in (
+            ("leads", Lead, Lead.lead_intel_icp_id), ("companies", Company, Company.icp_id),
+            ("stakeholders", Stakeholder, Stakeholder.lead_intel_icp_id), ("rated emails", EmailFeedback, EmailFeedback.lead_intel_icp_id),
+        ):  # fmt: skip
+            counts[label] = int(await self.session.scalar(select(func.count()).select_from(model).where(column == icp_id)) or 0)
+        return counts
+
+    async def forget(self, icp_id: UUID) -> None:
+        """Remove a deleted ICP's settings: its profiles, its campaign link, and it from example emails."""
+        await self.session.execute(delete(IcpProfile).where(IcpProfile.lead_intel_icp_id == icp_id))
+        await self.session.execute(delete(IcpCampaign).where(IcpCampaign.lead_intel_icp_id == icp_id))
+        await self.session.execute(
+            update(ExampleEmail).where(ExampleEmail.icp_ids.any(icp_id)).values(icp_ids=func.array_remove(ExampleEmail.icp_ids, icp_id))
+        )
+        await self.session.commit()
+
 
 class IcpProfileRepo:
     """Reads and writes `outreach.eo_icp_profiles` only."""

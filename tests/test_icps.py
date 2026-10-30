@@ -58,6 +58,7 @@ def test_save_profile_for_unknown_icp_is_404(client) -> None:
 class FakeIcpWriter:
     def __init__(self) -> None:
         self.added: list[dict] = []
+        self.updated, self.deleted, self.businesses = [], [], 0
 
     async def name_taken(self, name):
         return name.lower() in {"med spas", *(a["name"].lower() for a in self.added)}
@@ -68,6 +69,17 @@ class FakeIcpWriter:
         row = {"id": uuid4(), "created_by": created_by, "created_at": datetime.now(UTC), "updated_at": datetime.now(UTC), **values}
         self.added.append(row)
         return row
+
+    async def update_icp(self, icp_id, values):
+        self.updated.append((icp_id, values))
+        return {"id": icp_id, "name": "Med spas", **values}
+
+    async def businesses_in(self, icp_id):
+        return self.businesses
+
+    async def delete_icp(self, icp_id):
+        self.deleted.append(icp_id)
+        return True
 
 
 @pytest.fixture
@@ -136,3 +148,97 @@ def test_create_icp_needs_created_by(client, writer, monkeypatch) -> None:
 
     monkeypatch.setattr(get_settings(), "lead_intel_icp_created_by", None)
     assert client.post("/api/v1/icps", json=NEW_ICP).status_code == 503
+
+
+# ---------- Archiving and deleting ----------
+
+
+class Campaigns:
+    """CheapSequencer's campaigns and enrollments, faked."""
+
+    def __init__(self, enrolled=()):
+        self.list = [{"id": "c1", "name": "Coldbrew: Med spas", "status": "draft", "steps": []}]
+        self.enrolled = [{"status": s} for s in enrolled]
+        self.archived, self.copied = [], []
+
+    async def campaigns(self):
+        return [c for c in self.list if c["id"] not in self.archived]
+
+    async def enrollments(self, campaign_id):
+        return self.enrolled
+
+    async def campaign(self, campaign_id):
+        return next(c for c in self.list if c["id"] == campaign_id), "etag"
+
+    async def archive(self, campaign_id, etag, key):
+        self.archived.append(campaign_id)
+
+    async def duplicate(self, campaign_id, key):
+        copy = {"id": "c2", "name": "copy", "status": "draft"}
+        self.list.append(copy)
+        self.copied.append(campaign_id)
+        return copy
+
+    async def rename(self, campaign_id, name, etag, key):
+        next(c for c in self.list if c["id"] == campaign_id)["name"] = name
+
+
+@pytest.fixture
+def sequencer(no_real_sending):
+    from dependencies import get_optional_sequencer
+    from main import app
+
+    fake = Campaigns()
+    no_real_sending.rows[ICP_ID] = "c1"
+    app.dependency_overrides[get_optional_sequencer] = lambda: fake
+    return fake
+
+
+def test_archiving_turns_the_icp_off_and_archives_its_empty_campaign(client, writer, sequencer, no_real_sending) -> None:
+    sequencer.enrolled = [{"status": "completed"}, {"status": "replied"}]
+    r = client.post(f"/api/v1/icps/{ICP_ID}/archive")
+    assert r.status_code == 200, r.text
+    assert writer.updated == [(ICP_ID, {"enabled": False})] and sequencer.archived == ["c1"]
+    assert ICP_ID not in no_real_sending.rows and "was archived" in r.json()["campaignNote"]
+
+
+def test_archiving_waits_while_leads_are_mid_sequence(client, writer, sequencer) -> None:
+    sequencer.enrolled = [{"status": "active"}, {"status": "active"}, {"status": "completed"}]
+    r = client.post(f"/api/v1/icps/{ICP_ID}/archive")
+    assert r.status_code == 409 and r.json()["detail"].startswith('2 leads are still in "Coldbrew: Med spas"')
+    assert writer.updated == [] and sequencer.archived == []
+
+
+def test_restoring_turns_it_on_and_gives_it_a_new_campaign(client, writer, sequencer, no_real_sending) -> None:
+    no_real_sending.rows.clear()
+    sequencer.list.append({"id": "t", "name": "Coldbrew: Other", "status": "draft"})
+    sequencer.list[0]["status"] = "archived"
+    r = client.post(f"/api/v1/icps/{ICP_ID}/restore")
+    assert r.status_code == 200, r.text
+    assert writer.updated == [(ICP_ID, {"enabled": True})] and sequencer.copied == ["t"]
+    assert no_real_sending.rows == {ICP_ID: "c2"} and "created" in r.json()["campaignNote"]
+
+
+def test_deleting_an_unused_icp(client, writer, sequencer, no_real_sending) -> None:
+    assert client.delete(f"/api/v1/icps/{ICP_ID}").status_code == 204
+    assert writer.deleted == [ICP_ID] and sequencer.archived == ["c1"] and no_real_sending.forgotten == [ICP_ID]
+
+
+def test_an_icp_in_use_is_not_deleted(client, writer, sequencer, no_real_sending) -> None:
+    no_real_sending.in_use = {"leads": 3, "companies": 0}
+    writer.businesses = 12
+    r = client.delete(f"/api/v1/icps/{ICP_ID}")
+    assert r.status_code == 409
+    assert r.json()["detail"] == "Med spas is still used by 12 Lead Intel businesses, 3 leads, so it can't be deleted. Archive it instead."
+    assert writer.deleted == [] and sequencer.archived == []
+
+
+def test_deleting_needs_a_manager(client, writer) -> None:
+    from dependencies import get_current_user
+    from main import app
+    from services.auth import CurrentUser
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(uuid4(), "s@x.com", "S", "sales", [WORKSPACE_ID])
+    assert client.delete(f"/api/v1/icps/{ICP_ID}").status_code == 403
+    assert client.post(f"/api/v1/icps/{ICP_ID}/archive").status_code == 403
+    assert writer.deleted == [] and writer.updated == []

@@ -79,18 +79,21 @@ def test_supabase_url_is_converted_for_asyncpg() -> None:
     assert args == {"ssl": "require"}
 
 
-# ---- The agreed writes: adding and editing ICPs in Lead Intel (icps table only, never deleting) ----
+# ---- The agreed writes: adding, editing and deleting ICPs in Lead Intel (icps table only) ----
 
 APP_FILES = [p for p in ROOT.glob("**/*.py") if not {".venv", "tests", "migrations"} & set(p.parts)]
 
 
-def test_the_only_lead_intel_writes_are_inserting_and_updating_icps() -> None:
+def test_the_only_lead_intel_writes_are_inserting_updating_and_deleting_icps() -> None:
     source = (ROOT / "lead_intel_writes.py").read_text(encoding="utf-8")
     assert source.count("insert(") == 1 and "insert(icps)" in source
     assert source.count("update(") == 1 and "update(icps)" in source
-    for word in ("delete(", "UPDATE ", "DELETE ", "ALTER ", "DROP ", "TRUNCATE"):
+    assert source.count("delete(") == 1 and "delete(icps)" in source
+    # The delete only happens while no business is in the ICP, checked in the same statement.
+    assert "~exists().where(businesses.c.icp_id == icp_id)" in source
+    for word in ("UPDATE ", "DELETE ", "ALTER ", "DROP ", "TRUNCATE"):
         assert word not in source, f"lead_intel_writes.py must never {word.strip('( ')}"
-    assert "from lead_intel import icps\n" in source, "it may only touch the icps table"
+    assert "from lead_intel import businesses, icps\n" in source, "it may only write the icps table (businesses is read)"
 
 
 def test_nothing_else_writes_lead_intel_tables() -> None:
@@ -100,6 +103,6 @@ def test_nothing_else_writes_lead_intel_tables() -> None:
         f"{p.relative_to(ROOT)}: {m.group(0)}"
         for p in APP_FILES
         for m in write.finditer(p.read_text(encoding="utf-8"))
-        if not (p.name == "lead_intel_writes.py" and m.group(0).replace(" ", "") in ("insert(icps", "update(icps"))
+        if not (p.name == "lead_intel_writes.py" and m.group(0).replace(" ", "") in ("insert(icps", "update(icps", "delete(icps"))
     ]
     assert not offenders, offenders

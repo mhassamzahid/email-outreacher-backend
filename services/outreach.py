@@ -208,11 +208,47 @@ async def ensure_campaign(sequencer: Any, links: Any, icp_id: UUID, icp_name: st
     templates = sorted((c for c in campaigns if (c.get("name") or "").startswith(CAMPAIGN_PREFIX)), key=lambda c: c.get("name") or "")
     if not templates:
         return CampaignOutcome("skipped", wanted, "there's no Coldbrew campaign in CheapSequencer to copy the settings from.")
-    copy = await sequencer.duplicate(templates[0]["id"], key_for("duplicate", icp_id, templates[0]["id"]))
+    # The minute is in the key: a retry doesn't copy twice, but a later restore gets a new copy, not the archived one.
+    copy = await sequencer.duplicate(templates[0]["id"], key_for("duplicate", icp_id, templates[0]["id"], f"{datetime.now(UTC):%Y%m%d%H%M}"))
     await links.link(icp_id, copy["id"])  # linked first, so a failed rename is finished by the next save, not copied again
     _, etag = await sequencer.campaign(copy["id"])
     await sequencer.rename(copy["id"], wanted, etag, key_for("rename", copy["id"], wanted))
     return CampaignOutcome("created", wanted)
+
+
+# Enrollments in these states are over; anything else is a lead still in (or waiting for) the sequence.
+ENROLLMENT_DONE = {"completed", "finished", "stopped", "removed", "cancelled", "replied", "bounced", "unsubscribed", "failed"}
+
+
+class CampaignBusy(Exception):
+    def __init__(self, campaign: str, leads: int) -> None:
+        super().__init__(campaign)
+        self.campaign, self.leads = campaign, leads
+
+    @property
+    def message(self) -> str:
+        return (f'{self.leads} lead{"" if self.leads == 1 else "s"} {"is" if self.leads == 1 else "are"} still in "{self.campaign}". '
+                "Archiving it now would stop their emails, so wait until they finish, or remove them in CheapSequencer first.")  # fmt: skip
+
+
+async def retire_campaign(sequencer: Any, links: Any, icp_id: UUID) -> str | None:
+    """Archive the ICP's campaign and drop the link. Refuses (CampaignBusy) while any lead is still in it.
+    Returns the archived campaign's name, or None when the ICP had no campaign."""
+    campaign_id = (await links.all()).get(icp_id)
+    if campaign_id is None:
+        return None
+    found = next((c for c in await sequencer.campaigns() if c["id"] == campaign_id and c.get("status") != "archived"), None)
+    if found is None:
+        await links.unlink(icp_id)
+        return None
+    name = found.get("name") or ""
+    live = [e for e in await sequencer.enrollments(campaign_id) if str(e.get("status") or "").lower() not in ENROLLMENT_DONE]
+    if live:
+        raise CampaignBusy(name, len(live))
+    _, etag = await sequencer.campaign(campaign_id)
+    await sequencer.archive(campaign_id, etag, key_for("archive", campaign_id))
+    await links.unlink(icp_id)
+    return name
 
 
 @dataclass

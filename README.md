@@ -75,6 +75,9 @@ Admins open every workspace and manage users and workspaces; Management and admi
 | GET | `/api/v1/icps` | Lead Intel ICPs with company counts and the outreach profile |
 | POST | `/api/v1/icps` | Add an ICP to Lead Intel's `icps` table (Lead Intel's fields; insert-only, recorded as `LEAD_INTEL_ICP_CREATED_BY`) |
 | GET | `/api/v1/icps/{id}` | One ICP |
+| POST | `/api/v1/icps/{id}/archive` | Turn the ICP off (its `enabled` flag) and archive its CheapSequencer campaign. Refused while the campaign still has leads in a sequence. Managers |
+| POST | `/api/v1/icps/{id}/restore` | Turn it back on, with a new draft campaign. Managers |
+| DELETE | `/api/v1/icps/{id}` | Delete the ICP from Lead Intel's `icps` table and archive its campaign. Only when nothing uses it: no Lead Intel businesses (checked in the same statement, so no other row changes) and no leads, companies, stakeholders or rated emails in Coldbrew. Managers |
 | PUT | `/api/v1/icps/{id}/profile` | Save outreach settings for an ICP, including its product and its verify, hook and email prompt choices (writes `outreach.eo_icp_profiles` only) |
 | GET | `/api/v1/icps/{id}/companies` | Contactable companies for an ICP (`q`, `limit`, `offset`) |
 | GET | `/api/v1/companies` | Contactable Lead Intel companies (`icpId`, `noIcp`, `inWorkspace`, `q`, `limit`, `offset`); with `X-Workspace-Id` each has `importedAt` |

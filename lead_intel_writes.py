@@ -1,8 +1,10 @@
-"""The only writes this service makes to Lead Intel: adding an ICP, and editing an ICP's fields.
+"""The only writes this service makes to Lead Intel: adding, editing and deleting an ICP.
 
 Agreed scope, enforced by tests/test_lead_intel_safety.py:
-  - public.icps only: insert a new ICP (agreed first), and update an existing ICP's own fields
-    (agreed 2026-10-28, for every ICP). Never a delete, and no other Lead Intel table.
+  - public.icps only: insert a new ICP (agreed first), update an existing ICP's own fields
+    (agreed 2026-10-28, for every ICP, including `enabled` for archiving), and delete an ICP
+    (agreed 2026-10-30) only while no Lead Intel business is in it, so the delete never changes
+    another row (deleting it would set each business's icp_id to null). No other Lead Intel table is written.
   - All other Lead Intel data (businesses, their fields, everything else) is never changed.
 Everything else that touches Lead Intel lives in lead_intel.py and only reads.
 
@@ -13,10 +15,10 @@ an ICP here doesn't assign any businesses to it.
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import delete, exists, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from lead_intel import icps
+from lead_intel import businesses, icps
 
 
 class LeadIntelIcpWriter:
@@ -51,3 +53,19 @@ class LeadIntelIcpWriter:
         row = (await self.conn.execute(statement)).mappings().first()
         await self.conn.commit()
         return dict(row) if row else None
+
+    async def businesses_in(self, icp_id: UUID) -> int:
+        """How many Lead Intel businesses are in the ICP (deleting it would change each of them)."""
+        return int((await self.conn.execute(select(func.count()).where(businesses.c.icp_id == icp_id))).scalar_one())
+
+    async def delete_icp(self, icp_id: UUID) -> bool:
+        """Delete one ICP, commit, and say whether it was deleted. In the same statement it's only deleted
+        while no Lead Intel business is in it, so no other row is ever changed by the delete."""
+        statement = (
+            delete(icps)
+            .where(icps.c.id == icp_id, ~exists().where(businesses.c.icp_id == icp_id))
+            .returning(icps.c.id)
+        )
+        deleted = (await self.conn.execute(statement)).first() is not None
+        await self.conn.commit()
+        return deleted

@@ -164,3 +164,88 @@ async def save_icp_profile(
         raise HTTPException(status_code=422, detail="That product isn't one of this workspace's")
     profile = await profiles.upsert(workspace_id, icp_id, body.model_dump())
     return IcpProfileOut.model_validate(profile)
+
+
+async def _icp_out(icp_id: UUID, workspace_id: UUID | None, lead_intel: LeadIntelRepo, profiles: IcpProfileRepo, note: str | None) -> Icp:
+    row = await lead_intel.get_icp(icp_id)
+    by_id = await profiles.get_many(workspace_id, [icp_id]) if workspace_id else {}
+    return Icp.model_validate({**row, "profile": by_id.get(icp_id), "campaign_note": note})
+
+
+async def _retire(sequencer: SequencerClient | None, links: IcpCampaignRepo, icp_id: UUID) -> str | None:
+    """Archive the ICP's campaign first, so an ICP is never archived or deleted while its campaign still has leads."""
+    if sequencer is None:
+        return "CHEAPSEQUENCER_API_KEY isn't set, so its campaign wasn't touched."
+    try:
+        name = await outreach.retire_campaign(sequencer, links, icp_id)
+    except outreach.CampaignBusy as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except SendingError as exc:
+        raise HTTPException(status_code=502, detail=f"Nothing was changed. {exc.message}") from exc
+    return f'Its campaign "{name}" was archived in CheapSequencer.' if name else None
+
+
+@router.post("/{icp_id}/archive", response_model=Icp)
+async def archive_icp(
+    icp_id: UUID,
+    workspace_id: UUID | None = Depends(get_workspace_id),
+    writer: LeadIntelIcpWriter = Depends(get_lead_intel_icp_writer),
+    lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    profiles: IcpProfileRepo = Depends(get_icp_profile_repo),
+    sequencer: SequencerClient | None = Depends(get_optional_sequencer),
+    links: IcpCampaignRepo = Depends(get_icp_campaign_repo),
+    _: object = Depends(require_manager),
+) -> Icp:
+    """Turn the ICP off (its `enabled` flag in Lead Intel) and archive its campaign. Its leads, companies
+    and history stay; Restore brings it back. Refused while its campaign still has leads in a sequence."""
+    if not await lead_intel.get_icp(icp_id):
+        raise HTTPException(status_code=404, detail="ICP not found")
+    note = await _retire(sequencer, links, icp_id)
+    await writer.update_icp(icp_id, {"enabled": False})
+    return await _icp_out(icp_id, workspace_id, lead_intel, profiles, note)
+
+
+@router.post("/{icp_id}/restore", response_model=Icp)
+async def restore_icp(
+    icp_id: UUID,
+    workspace_id: UUID | None = Depends(get_workspace_id),
+    writer: LeadIntelIcpWriter = Depends(get_lead_intel_icp_writer),
+    lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    profiles: IcpProfileRepo = Depends(get_icp_profile_repo),
+    sequencer: SequencerClient | None = Depends(get_optional_sequencer),
+    links: IcpCampaignRepo = Depends(get_icp_campaign_repo),
+    _: object = Depends(require_manager),
+) -> Icp:
+    """Turn an archived ICP back on and give it a campaign again (a new draft copy)."""
+    row = await writer.update_icp(icp_id, {"enabled": True})
+    if row is None:
+        raise HTTPException(status_code=404, detail="ICP not found")
+    note = await _campaign_note(sequencer, links, icp_id, row["name"])
+    return await _icp_out(icp_id, workspace_id, lead_intel, profiles, note)
+
+
+@router.delete("/{icp_id}", status_code=204)
+async def delete_icp(
+    icp_id: UUID,
+    writer: LeadIntelIcpWriter = Depends(get_lead_intel_icp_writer),
+    lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
+    sequencer: SequencerClient | None = Depends(get_optional_sequencer),
+    links: IcpCampaignRepo = Depends(get_icp_campaign_repo),
+    _: object = Depends(require_manager),
+) -> None:
+    """Delete the ICP from Lead Intel's icps table and archive its campaign. Only an ICP nothing uses yet:
+    no Lead Intel businesses (deleting would change them) and no leads, companies or ratings in Coldbrew.
+    Anything in use is refused with what uses it; archive it instead."""
+    icp = await lead_intel.get_icp(icp_id)
+    if not icp:
+        raise HTTPException(status_code=404, detail="ICP not found")
+    in_use = {label: n for label, n in (await links.usage(icp_id)).items() if n}
+    if businesses := await writer.businesses_in(icp_id):
+        in_use = {"Lead Intel businesses": businesses, **in_use}
+    if in_use:
+        said = ", ".join(f"{n} {label}" for label, n in in_use.items())
+        raise HTTPException(status_code=409, detail=f"{icp['name']} is still used by {said}, so it can't be deleted. Archive it instead.")
+    await _retire(sequencer, links, icp_id)
+    if not await writer.delete_icp(icp_id):
+        raise HTTPException(status_code=409, detail=f"{icp['name']} couldn't be deleted: Lead Intel has businesses in it now. Archive it instead.")
+    await links.forget(icp_id)

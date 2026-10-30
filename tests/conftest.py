@@ -186,7 +186,7 @@ def no_real_sending(monkeypatch):
     app.dependency_overrides[get_optional_inboxes] = lambda: None
     links = FakeIcpCampaigns()
     app.dependency_overrides[get_icp_campaign_repo] = lambda: links
-    yield
+    yield links
     for dep in (get_optional_sequencer, get_optional_inboxes, get_icp_campaign_repo):
         app.dependency_overrides.pop(dep, None)
 
@@ -196,12 +196,24 @@ class FakeIcpCampaigns:
 
     def __init__(self) -> None:
         self.rows: dict[UUID, str] = {}
+        self.in_use: dict[str, int] = {}  # what usage() reports
+        self.forgotten: list[UUID] = []
 
     async def all(self) -> dict[UUID, str]:
         return dict(self.rows)
 
     async def link(self, icp_id: UUID, campaign_id: str) -> None:
         self.rows[icp_id] = campaign_id
+
+    async def unlink(self, icp_id: UUID) -> None:
+        self.rows.pop(icp_id, None)
+
+    async def usage(self, icp_id: UUID) -> dict[str, int]:
+        return dict(self.in_use)
+
+    async def forget(self, icp_id: UUID) -> None:
+        self.rows.pop(icp_id, None)
+        self.forgotten.append(icp_id)
 
 
 @pytest.fixture
