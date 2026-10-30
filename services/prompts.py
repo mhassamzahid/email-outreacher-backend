@@ -221,11 +221,12 @@ How it must read:
 - No hype or buzzwords: never "leverage", "synergy", "game-changer", "revolutionize", "streamline", "cutting-edge", "unlock", "elevate", "seamless", "boost", "solution", "innovative", "I wanted to reach out".
 - No flattery: never "impressive", "amazing", "love what you're doing".
 - Mention their post or detail once. Never say how you found it (no "I scraped", "my research", "an AI").
+- Never write about what you know or don't know about them, or how you got it: no "I don't know much about", "I couldn't find", "from what I can see", "I noticed you haven't posted", and no "yet" about your knowledge. Write as someone who simply knows what's given.
 - No signature or sign-off name: the sending tool adds it. End on the question.
 
 Subject line: 2 to 6 words, lowercase, specific to them and their detail, never clickbait or salesy. For example "round rock shop" or "second shop, quoting".
 
-Facts: use only what's given about the person, their company and our product. If a detail isn't given, don't use it. Proof and numbers are used exactly as written or not at all. If the hooks are empty, open with a specific, true observation about their role or company instead.
+Facts: use only what's given about the person, their company and our product. If a detail isn't given, don't use it. Proof and numbers are used exactly as written or not at all. If the hooks are empty, open with a specific, true observation about their role or company. If nothing specific about them is given either, open on a problem that's common for businesses like theirs, taken from the ICP's pains and what our product does, as a plain observation or question. For example "Most print shops end up tracking orders across a store, a spreadsheet and an inbox." Never fill the gap by saying you don't know them, and never pretend to know what you weren't given: lower the confidence instead.
 
 Learn from examples and feedback: treat the example emails as the voice to write in, and match their length, tone and structure (never their facts). Do the same with emails a reviewer rated good. When you're given emails rated bad, avoid exactly what the reviewer criticised.
 
@@ -386,6 +387,7 @@ FOLLOWUP_RULES = """How it must read:
 - No exclamation marks, no emojis, no bullet points, no links, no bold or headings.
 - No guilt or pressure: never "just checking in", "circling back", "bumping this", "did you see my email", "following up on my last email".
 - No hype or buzzwords: never "leverage", "game-changer", "revolutionize", "streamline", "unlock", "elevate", "seamless", "boost", "solution", "innovative".
+- Never write about what you know or don't know about them, or how you found anything ("I don't know much about", "I couldn't find", "from what I can see").
 - No signature or sign-off name: the sending tool adds it.
 
 Facts: use only what's given about the person, their company and our product. Proof and numbers are used exactly as written or not at all. Never invent results, customers, numbers or anything they said.
