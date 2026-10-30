@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -38,10 +38,28 @@ class IcpProfileIn(ApiModel):
     # Lead analysis: whose posts are read for the opening line.
     enabled_sources: list[str] = []
     # Verification: what research reads to decide whether a business is worth contacting.
-    verification_sources: list[Literal["website", "jina", "instagram", "score"]] = ["website", "jina", "instagram", "score"]
+    verification_sources: list[str] = ["website", "jina", "instagram", "score"]
     # Lead analysis limits for this ICP; null means the workspace setting.
     posts_per_source: int | None = Field(default=None, ge=1, le=20)
     max_post_age_days: int | None = Field(default=None, ge=1, le=365)
+
+    @field_validator("verification_sources")
+    @classmethod
+    def _known_verification(cls, value: list[str]) -> list[str]:
+        from services.sources import VERIFICATION_IDS
+
+        unknown = sorted(set(value) - set(VERIFICATION_IDS))
+        if unknown:
+            raise ValueError(f"Unknown verification sources: {', '.join(unknown)}")
+        return list(dict.fromkeys(value))
+
+    @field_validator("enabled_sources")
+    @classmethod
+    def _known_analysis(cls, value: list[str]) -> list[str]:
+        from services.sources import ANALYSIS_IDS
+
+        # Older profiles saved "website" here; it never fetched posts, so it's dropped.
+        return [v for v in dict.fromkeys(value) if v in ANALYSIS_IDS]
     # What we sell to this ICP (eo_products), or none.
     product_id: UUID | None = None
     # Null uses the workspace's default prompt of that kind.
@@ -483,7 +501,7 @@ class CampaignSyncOut(ApiModel):
 # ---------- Cost estimator ----------
 
 # How an item's quantity counts: per lead contacted, per month, or per email sent.
-CostBasis = Literal["lead", "month", "email"]
+CostBasis = Literal["lead", "month", "email", "company"]
 
 
 class CostItem(ApiModel):
@@ -506,6 +524,8 @@ class CostItem(ApiModel):
     action: str | None = Field(default=None, max_length=60)
     note: str = Field(default="", max_length=300)
     enabled: bool = True
+    # A source Coldbrew can't run yet (services/sources.py): shown for planning, never run.
+    planned: bool = False
 
 
 class CostEstimate(ApiModel):
@@ -514,8 +534,8 @@ class CostEstimate(ApiModel):
     emails_per_lead: float = Field(ge=0, le=10)
     # Replies per 100 leads, for the cost per reply. 0 until you set it.
     reply_rate_pct: float = Field(ge=0, le=100)
-    # Website pages company verification reads per company (Settings allow up to 6).
-    pages_per_company: float = Field(default=1, ge=0, le=100)
+    # Companies verified a month: lines counted per company use this.
+    companies_per_month: int = Field(default=0, ge=0, le=1_000_000)
     items: list[CostItem] = Field(max_length=80)
 
 
@@ -533,6 +553,28 @@ class MeasuredUse(ApiModel):
     tokens_in: int
     tokens_out: int
     cost_usd: float
+
+
+class SourceOut(ApiModel):
+    """A source Coldbrew can use (services/sources.py) and its price for the Apify plan tier."""
+
+    id: str
+    kind: str  # verification | analysis
+    level: str  # company | lead
+    label: str
+    hint: str
+    provider: str  # coldbrew | jina | claude | apify
+    unit: str
+    actor: str | None
+    status: str  # live | planned
+    unit_price: float | None  # per unit, from Apify for the plan tier; None when free or unknown
+    run_price: float | None  # per run, if the actor charges one
+
+
+class SourcesOut(ApiModel):
+    tier: str | None  # the Apify plan tier the prices are for; None without APIFY_TOKEN
+    sources: list[SourceOut]
+    note: str | None = None
 
 
 class CostReference(ApiModel):

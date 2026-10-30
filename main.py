@@ -7,7 +7,7 @@ from config import get_settings
 from dependencies import get_current_user, require_api_secret
 from routers import (
     companies, emails, examples, exclusions, health, icps, improve, leads, mailboxes, pipeline, posts, products, prompts,
-    sending, settings, stakeholders, usage, users, workspaces,
+    sending, settings, sources, stakeholders, usage, users, workspaces,
 )  # fmt: skip
 
 
@@ -35,6 +35,7 @@ protected.include_router(examples.router)
 protected.include_router(exclusions.router)
 protected.include_router(mailboxes.router)
 protected.include_router(sending.router)
+protected.include_router(sources.router)
 api_router.include_router(protected)
 
 

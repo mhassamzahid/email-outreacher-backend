@@ -38,13 +38,51 @@ def store(client):
 
 def test_the_starting_estimate_only_prices_what_has_a_source() -> None:
     estimate = CostEstimate(**DEFAULT_ESTIMATE)
-    priced = {i.id for i in estimate.items if i.price_usd}
-    assert priced == {"email-generation", "follow-up", "verification", "maps-search", "maps-location", "linkedin-posts",
-                      "instagram-posts", "cheapsequencer", "cheapinboxes"}  # fmt: skip
+    unpriced = {i.id for i in estimate.items if not i.price_usd}
+    # Apollo, Apify people search, Jina, hosting: no source Coldbrew can read, so COST_PRICES fills them in.
+    assert unpriced == {"prompt-improvement", "apollo-companies", "apollo-people", "apify-linkedin-people", "apollo-reveal",
+                        "website-pages", "railway", "vercel", "supabase"}  # fmt: skip
     assert all(i.note for i in estimate.items)  # every line says where its number comes from
     # Claude lines are priced from tokens and the model's price table.
     email = next(i for i in estimate.items if i.id == "email-generation")
     assert email.price_usd == claude_price(email.model, email.tokens_in, email.tokens_out) > 0
+
+
+def test_apify_prices_beat_the_starting_ones_and_cost_prices_beat_both() -> None:
+    from services.cost_estimate import refresh
+
+    apify = {"analysis:facebook": (0.0008, 0.001), "verification:google_reviews": (0.00015, 5e-05)}
+    out = refresh(DEFAULT_ESTIMATE, "claude-haiku-5-5", {"google-reviews": 0.01}, apify)
+    price = {i["id"]: i["price_usd"] for i in out["items"]}
+    assert price["facebook-posts"] == 0.0008  # Apify's price for the plan
+    assert price["google-reviews"] == 0.01  # COST_PRICES wins
+    assert price["tiktok-videos"] == 0.0037  # Apify said nothing: the starting price
+    planned = {i["id"] for i in out["items"] if i["planned"]}
+    assert "facebook-posts" in planned and "linkedin-posts" not in planned and "instagram-profile" not in planned
+
+
+def test_new_lines_are_added_to_an_older_saved_estimate() -> None:
+    from services.cost_estimate import refresh
+
+    old = {**DEFAULT_ESTIMATE, "items": [i for i in DEFAULT_ESTIMATE["items"] if i["id"] != "x-posts"]}
+    ids = [i["id"] for i in refresh(old, "claude-haiku-5-5", {})["items"]]
+    assert ids.count("x-posts") == 1
+
+
+def test_verification_counted_a_month_becomes_companies_per_month() -> None:
+    old = {"leads_per_month": 10, "emails_per_lead": 3, "reply_rate_pct": 0, "pages_per_company": 4, "items": [
+        {"id": "verification", "name": "x", "category": "Verification", "unit_label": "per company", "price_usd": 0.0007,
+         "quantity": 300, "basis": "month", "model": "claude-haiku-5-5", "tokens_in": 1, "tokens_out": 1, "action": None,
+         "note": "", "enabled": True},
+        {"id": "website-pages", "name": "x", "category": "Verification", "unit_label": "per page", "price_usd": 0,
+         "quantity": 1200, "basis": "month", "model": None, "tokens_in": None, "tokens_out": None, "action": None,
+         "note": "", "enabled": True},
+    ]}  # fmt: skip
+    up = upgrade(old)
+    assert up["companies_per_month"] == 300 and "pages_per_company" not in up
+    by_id = {i["id"]: i for i in up["items"]}
+    assert (by_id["verification"]["basis"], by_id["verification"]["quantity"]) == ("company", 1)
+    assert (by_id["website-pages"]["basis"], by_id["website-pages"]["quantity"]) == ("company", 4)
 
 
 def test_an_estimate_saved_in_the_old_shape_still_opens() -> None:
@@ -122,11 +160,11 @@ def test_prices_are_read_only_and_come_from_the_server(client, store, monkeypatc
     for item in body["items"]:
         if item["id"] in ("cheapsequencer", "apollo-reveal"):
             item["priceUsd"] = 999  # the browser trying to change a price
-    body["pagesPerCompany"] = 4
+    body["companiesPerMonth"] = 400
     saved = client.put("/api/v1/settings/cost-estimate", headers=WS, json=body).json()
     price = {i["id"]: i["priceUsd"] for i in saved["items"]}
     assert (price["cheapsequencer"], price["apollo-reveal"], price["railway"]) == (29, 0.02, 20)
-    assert saved["pagesPerCompany"] == 4 and store.saved["pages_per_company"] == 4
+    assert saved["companiesPerMonth"] == 400 and store.saved["companies_per_month"] == 400
     verification = next(i for i in saved["items"] if i["id"] == "verification")
     assert verification["model"] == "claude-sonnet-5-5"
     assert verification["priceUsd"] == claude_price("claude-sonnet-5-5", verification["tokensIn"], verification["tokensOut"])

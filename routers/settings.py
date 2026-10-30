@@ -8,11 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from config import get_settings
 from crud import ProviderCallRepo, SettingsRepo
-from dependencies import get_provider_call_repo, get_settings_repo, require_manager, require_workspace_id
+from dependencies import get_optional_apify, get_provider_call_repo, get_settings_repo, require_manager, require_workspace_id
 from schemas import ClaudePrice, CostEstimate, CostReference, FeedbackSettings, MeasuredUse, ResearchSettings
 from services.auth import CurrentUser
+from services.apify import ApifyClient, ApifyError
 from services.claude import PRICES
 from services.cost_estimate import refresh
+from services.sources import apify_prices
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -58,18 +60,26 @@ async def save_research_settings(
     return ResearchSettings(**await settings.save_research(workspace_id, body.model_dump()))
 
 
-def _priced(estimate: dict) -> dict:
+async def _priced(estimate: dict, apify: ApifyClient | None) -> dict:
     config = get_settings()
-    return refresh(estimate, config.claude_scoring_model, config.cost_price_overrides)
+    prices = None
+    if apify is not None:
+        try:
+            prices = (await apify_prices(apify))[1]
+        except ApifyError:
+            prices = None  # Apify unreachable: the starting prices stand in
+    return refresh(estimate, config.claude_scoring_model, config.cost_price_overrides, prices)
 
 
 @router.get("/cost-estimate", response_model=CostEstimate)
 async def get_cost_estimate(
-    workspace_id: UUID = Depends(require_workspace_id), settings: SettingsRepo = Depends(get_settings_repo)
+    workspace_id: UUID = Depends(require_workspace_id),
+    settings: SettingsRepo = Depends(get_settings_repo),
+    apify: ApifyClient | None = Depends(get_optional_apify),
 ) -> CostEstimate:
     """The cost estimator's inputs and cost items: the workspace's saved ones, or the starting ones."""
     await _workspace(settings, workspace_id)
-    return CostEstimate(**_priced(await settings.cost_estimate(workspace_id)))
+    return CostEstimate(**await _priced(await settings.cost_estimate(workspace_id), apify))
 
 
 @router.put("/cost-estimate", response_model=CostEstimate)
@@ -77,13 +87,15 @@ async def save_cost_estimate(
     body: CostEstimate,
     workspace_id: UUID = Depends(require_workspace_id),
     settings: SettingsRepo = Depends(get_settings_repo),
+    apify: ApifyClient | None = Depends(get_optional_apify),
     _: CurrentUser = Depends(require_manager),
 ) -> CostEstimate:
     await _workspace(settings, workspace_id)
     if len({item.id for item in body.items}) != len(body.items):
         raise HTTPException(status_code=422, detail="Each cost item needs its own id")
     # Prices are read-only: what's saved is today's price, whatever the browser sent.
-    return CostEstimate(**_priced(await settings.save_cost_estimate(workspace_id, _priced(body.model_dump()))))
+    priced = await _priced(body.model_dump(), apify)
+    return CostEstimate(**await _priced(await settings.save_cost_estimate(workspace_id, priced), apify))
 
 
 MEASURED_DAYS = 90

@@ -192,6 +192,10 @@ class ApifyClient:
             raise ApifyError(_message(response), response.status_code)
         return response.json()
 
+    async def get(self, path: str, **params: Any) -> Any:
+        """A read from Apify's API: the account, an actor's details and prices. Free."""
+        return await self._request("GET", path, params=params or None)
+
     async def run(self, actor: str, actor_input: dict[str, Any], max_items: int) -> RunResult:
         """Start a run, wait for it, and read up to `max_items` results."""
         run = (await self._request("POST", f"/acts/{actor}/runs", json=actor_input, params={"waitForFinish": 60}))["data"]
