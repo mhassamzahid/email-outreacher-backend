@@ -355,6 +355,63 @@ class MailboxesOut(ApiModel):
     errors: list[str]
 
 
+# ---------- Sending through CheapSequencer ----------
+
+
+class SendingSettingsIn(ApiModel):
+    # Who the emails are from. US law asks commercial email to carry a physical postal address.
+    sender_company: str = Field(default="", max_length=200)
+    sender_address: str = Field(default="", max_length=500)
+    # What email 2 and 3 say until Coldbrew writes the personal one ({{first_name}} is filled in).
+    followup_fallback_2: str = Field(min_length=1, max_length=2000)
+    followup_fallback_3: str = Field(min_length=1, max_length=2000)
+    # How many hours before a follow-up is due Claude writes it.
+    followup_lead_hours: int = Field(ge=2, le=72)
+
+
+class TemplateOutcomeOut(ApiModel):
+    campaign: str
+    status: str  # updated | unchanged | skipped
+    reason: str | None = None
+
+
+class SendingSettingsOut(SendingSettingsIn):
+    # What saving did to the campaigns' text.
+    templates: list[TemplateOutcomeOut]
+
+
+class SendingCampaignOut(ApiModel):
+    id: str
+    name: str
+    status: str
+    daily_send_cap: int | None
+    queued: int
+
+
+class QueueIn(ApiModel):
+    email_ids: list[UUID] = Field(min_length=1, max_length=500)
+
+
+class QueueOutcomeOut(ApiModel):
+    email_id: UUID
+    status: str  # queued | skipped
+    reason: str | None = None
+    campaign: str | None = None
+
+
+class QueueOut(ApiModel):
+    queued: int
+    results: list[QueueOutcomeOut]
+
+
+class FollowUpRunOut(ApiModel):
+    checked: int
+    written: int
+    ended: int
+    cost_usd: float
+    notes: list[str]
+
+
 # ---------- Users ----------
 
 UserRole = Literal["sales", "management", "admin"]
@@ -689,7 +746,7 @@ class UsageOut(ApiModel):
 
 # ---------- Prompts ----------
 
-PromptKind = Literal["verify", "hook", "email", "score"]
+PromptKind = Literal["verify", "hook", "email", "score", "followup2", "followup3"]
 
 
 class PromptVersionIn(ApiModel):

@@ -60,7 +60,7 @@ from services.generation import EmailWriter, Example, Item, LeadContext, PromptV
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
-LEAD_STATUS = {"draft": "generated", "edited": "generated", "approved": "approved", "skipped": "skipped"}
+LEAD_STATUS = {"draft": "generated", "edited": "generated", "approved": "approved", "queued": "approved", "skipped": "skipped"}
 
 
 def _name(lead: Lead) -> str:
@@ -182,10 +182,14 @@ async def generate(
     lead_intel_fields: dict[UUID, dict[str, Any] | None] = {}
 
     # Gather everything from the database first; only the Claude calls run side by side.
+    contacted = await emails.in_sequence(workspace_id, ids)
     for lead_id in ids:
         lead = leads.get(lead_id)
         if lead is None:
             outcomes[lead_id] = GenerateOutcome(lead_id=lead_id, name=None, status="skipped", reason="Not in this workspace")
+            continue
+        if lead_id in contacted:
+            outcomes[lead_id] = GenerateOutcome(lead_id=lead_id, name=_name(lead), status="skipped", reason="Already queued for sending")
             continue
         company = await emails.company_for(workspace_id, lead)
         keys = person_keys(lead.email, lead.domain)
@@ -340,8 +344,8 @@ async def _out(emails: EmailRepo, rows: list[tuple[Email, Lead]], feedback: Feed
                 feedback=FeedbackOut.model_validate(ratings[e.id]) if e.id in ratings else None,
                 examples_used=len(e.examples_used or []),
                 # The lead holds the score of its current draft; older, sent or skipped drafts show none.
-                score=lead.score if e.status in ("draft", "edited", "approved") else None,
-                score_reasons=(lead.score_reasons or []) if e.status in ("draft", "edited", "approved") else [],
+                score=lead.score if e.status in ("draft", "edited", "approved", "queued") else None,
+                score_reasons=(lead.score_reasons or []) if e.status in ("draft", "edited", "approved", "queued") else [],
             )  # fmt: skip
         )
     return out
@@ -349,7 +353,7 @@ async def _out(emails: EmailRepo, rows: list[tuple[Email, Lead]], feedback: Feed
 
 @router.get("", response_model=list[EmailOut])
 async def list_emails(
-    status: str | None = Query(default=None, pattern="^(draft|edited|approved|sent|skipped)$"),
+    status: str | None = Query(default=None, pattern="^(draft|edited|approved|queued|sent|skipped)$"),
     lead_id: UUID | None = Query(default=None, alias="leadId"),
     workspace_id: UUID = Depends(require_workspace_id),
     emails: EmailRepo = Depends(get_email_repo),
@@ -418,6 +422,8 @@ async def update_email(
     email, lead = found
     if email.status == "sent":
         raise HTTPException(status_code=409, detail="This email was already sent")
+    if email.status == "queued" or email.step > 1:
+        raise HTTPException(status_code=409, detail="This email is queued in CheapSequencer and can't be changed here")
     if body.subject is not None:
         email.subject = body.subject.strip()
     if body.body is not None and body.body.strip() != (email.edited_body or email.body):

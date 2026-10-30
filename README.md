@@ -56,6 +56,10 @@ Admins open every workspace and manage users and workspaces; Management and admi
 | DELETE | `/api/v1/exclusions/{id}` | Take an entry off the list |
 | POST | `/api/v1/exclusions/company/{companyId}` | Put a pipeline company on the list by every key it has, and mark it not a fit |
 | GET | `/api/v1/mailboxes` | The sending mailboxes from CheapSequencer (limits, warmup, today's sends and placements), plan usage, campaigns, and each domain's DNS health from CheapInboxes. Read-only |
+| GET, PUT | `/api/v1/sending/settings` | Sender company and physical address (CAN-SPAM), the generic text of emails 2 and 3, and how many hours before it's due a follow-up is written. Saving (managers) writes the signature into every "Coldbrew: " campaign that's draft or paused |
+| GET | `/api/v1/sending/campaigns` | The "Coldbrew: " campaigns in CheapSequencer with how many leads were queued into each |
+| POST | `/api/v1/sending/queue` | Put approved first emails into their ICP's campaign (`{emailIds}`): a new list, a CSV import with `email_1_subject`/`email_1_body` and the generic follow-ups, then enrollment. Never activates a campaign or sends. 409 until the sender address is set |
+| POST | `/api/v1/sending/follow-ups/run` | Read each campaign's enrollments, record sends, replies and stops, and have Claude write the follow-ups due within the lead time for leads who haven't replied. Also runs on its own every 30 minutes |
 | GET | `/api/v1/me` | The signed-in person: role, status and workspaces |
 | GET/POST | `/api/v1/users` | Admins: everyone; add someone by email with a role and workspaces, ready for their first sign-in |
 | PATCH/DELETE | `/api/v1/users/{id}` | Admins: change role, status or workspaces; remove from this app (their Supabase account stays). The last active admin can't be lost |

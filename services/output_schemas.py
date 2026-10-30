@@ -11,7 +11,7 @@ from typing import Any
 import anthropic
 from pydantic import BaseModel, TypeAdapter
 
-from services.generation import EmailDraft, EmailScore, HookChoice
+from services.generation import EmailDraft, EmailScore, FollowUpDraft, HookChoice
 from services.scoring import CompanyScore, CompanyScoreOrRead
 
 # kind -> [(name, model, when it's used)]
@@ -31,6 +31,8 @@ OUTPUTS: dict[str, list[tuple[str, type[BaseModel], str]]] = {
     "hook": [("Ranked hooks", HookChoice, "Used every time hook selection runs.")],
     "email": [("Email draft", EmailDraft, "Used every time an email is written.")],
     "score": [("Email score", EmailScore, "Used every time a draft is scored.")],
+    "followup2": [("Follow-up", FollowUpDraft, "Used when email 2 is nearly due and the person hasn't replied.")],
+    "followup3": [("Follow-up", FollowUpDraft, "Used when email 3 is nearly due and the person hasn't replied.")],
 }
 
 

@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-KINDS = ("verify", "hook", "email", "score")
+KINDS = ("verify", "hook", "email", "score", "followup2", "followup3")
 PAGE_CHARS = 4000  # per page, when pages are shown one by one
 POST_CHARS = 700  # per company post in {{company.posts}} for verification
 PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
@@ -371,11 +371,135 @@ Words we never use: {{icp.wordsToAvoid}}
 
 Score it using the scale and deductions you were given, and give 2 to 5 reasons."""
 
+# ---------------------------------------------------------------------------------------------------
+# Follow-ups (email 2 and email 3)
+#
+# Written only when they're nearly due and only for people who haven't replied, so nobody who answers
+# email 1 costs anything more. They reply inside email 1's thread, so they have no subject line.
+# ---------------------------------------------------------------------------------------------------
+
+FOLLOWUP_RULES = """How it must read:
+- It replies inside the same email thread, so never repeat the first email and never restate who we are.
+- Human and specific, like a short note from a busy peer. Use their first name once, at the start.
+- Plain and warm. Use contractions. Short sentences.
+- Never use em dashes or en dashes. Use commas, periods or parentheses instead.
+- No exclamation marks, no emojis, no bullet points, no links, no bold or headings.
+- No guilt or pressure: never "just checking in", "circling back", "bumping this", "did you see my email", "following up on my last email".
+- No hype or buzzwords: never "leverage", "game-changer", "revolutionize", "streamline", "unlock", "elevate", "seamless", "boost", "solution", "innovative".
+- No signature or sign-off name: the sending tool adds it.
+
+Facts: use only what's given about the person, their company and our product. Proof and numbers are used exactly as written or not at all. Never invent results, customers, numbers or anything they said.
+
+What to return:
+- body: the email body, starting with the greeting ("Hi Maya,").
+- confidence: 0 to 100, how well grounded and natural it is. Lower it when you had little to work with."""
+
+FOLLOWUP2_SYSTEM = """You write the second email in a short cold outreach sequence. The first email went out a few days ago and the person hasn't replied. This one is a brief follow-up in the same thread.
+
+Its job is to add one new reason to reply, not to repeat the first email:
+1. Open with their first name and one new angle: a different detail from their posts or company (use the next-best hook if there is one), or one concrete way our product helps someone in their exact situation that the first email didn't mention.
+2. Make it about them in one or two sentences.
+3. End with one easy question, even easier to answer than the first one. For example "Worth a quick look?" or "Is this on your radar at all?"
+
+Length: 35 to 70 words in the body.
+
+""" + FOLLOWUP_RULES
+
+FOLLOWUP2_USER = """Write the second email (a follow-up) to {{lead.firstName}}. They haven't replied to the first one.
+
+## The first email, already sent
+
+Subject: {{email1.subject}}
+
+{{email1.body}}
+
+## The person
+
+Name: {{lead.fullName}}
+Title: {{lead.title}}
+Company: {{lead.company}} ({{lead.website}})
+
+## Other hooks we found (the first email used hook 1)
+
+{{hooks}}
+
+## What we sell
+
+Product: {{product.name}}
+What it does for them: {{product.value}}
+Proof (use word for word, or not at all): {{product.proof}}
+Pricing or offer: {{product.offer}}
+Call to action: {{product.cta}}
+
+## Our angle for this ICP
+
+Their pains: {{icp.pains}}
+How we frame our offer for them: {{icp.offer}}
+Tone: {{icp.tone}}
+Never use these words: {{icp.wordsToAvoid}}
+
+## Example emails, in the voice to write in
+
+{{examples.samples}}
+
+## Now write it
+
+Add one new reason to reply that the first email didn't use, keep it to 35 to 70 words, and end with one easy question. No em dashes, no invented facts, no repeating the first email."""
+
+FOLLOWUP3_SYSTEM = """You write the third and last email in a short cold outreach sequence. The person hasn't replied to the first two emails. This one closes the loop politely in the same thread.
+
+Its job is to make replying easy, or let them go gracefully:
+1. Open with their first name and one short line that shows you're not going to keep emailing.
+2. Leave one simple door open: the easiest next step from our offer (for example a free trial or a short look), in one sentence.
+3. End with a yes-or-no question or an easy out. For example "Should I close the loop on this?" or "Want me to send it over, or not the right time?"
+
+Length: 25 to 55 words in the body.
+
+""" + FOLLOWUP_RULES
+
+FOLLOWUP3_USER = """Write the last email in the sequence to {{lead.firstName}}. They haven't replied to the first two.
+
+## The first email, already sent
+
+Subject: {{email1.subject}}
+
+{{email1.body}}
+
+## The second email, already sent
+
+{{email2.body}}
+
+## The person
+
+Name: {{lead.fullName}}
+Company: {{lead.company}}
+
+## What we sell
+
+Product: {{product.name}}
+Pricing or offer (the easiest next step): {{product.offer}}
+Call to action: {{product.cta}}
+
+## Our angle for this ICP
+
+Tone: {{icp.tone}}
+Never use these words: {{icp.wordsToAvoid}}
+
+## Example emails, in the voice to write in
+
+{{examples.samples}}
+
+## Now write it
+
+Close the loop politely, leave one easy door open, and end with a yes-or-no question or an easy out. 25 to 55 words, no em dashes, no invented facts, no repeating the earlier emails."""
+
 DEFAULTS: dict[str, DefaultPrompt] = {
     "verify": DefaultPrompt("Default company verification", VERIFY_SYSTEM, VERIFY_USER, 0, 4096),
     "hook": DefaultPrompt("Default hook selection", HOOK_SYSTEM, HOOK_USER, 0.2, 4096, max_posts=25),
     "email": DefaultPrompt("Default email generation", EMAIL_SYSTEM, EMAIL_USER, 0.7, 4096, max_posts=10),
     "score": DefaultPrompt("Default email scoring", SCORE_SYSTEM, SCORE_USER, 0, 4096),
+    "followup2": DefaultPrompt("Default follow-up (email 2)", FOLLOWUP2_SYSTEM, FOLLOWUP2_USER, 0.7, 4096),
+    "followup3": DefaultPrompt("Default follow-up (email 3)", FOLLOWUP3_SYSTEM, FOLLOWUP3_USER, 0.7, 4096),
 }
 
 

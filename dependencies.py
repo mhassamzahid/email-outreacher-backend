@@ -18,6 +18,7 @@ from crud import (
     PostRepo,
     ProductRepo,
     PromptRepo,
+    SendingRepo,
     SettingsRepo,
     ProviderCallRepo,
     StakeholderRepo,
@@ -41,6 +42,10 @@ from services.website import WebsiteReader
 
 def get_lead_intel_repo(conn: AsyncConnection = Depends(get_readonly_conn)) -> LeadIntelRepo:
     return LeadIntelRepo(conn)
+
+
+def get_sending_repo(session: AsyncSession = Depends(get_session)) -> SendingRepo:
+    return SendingRepo(session)
 
 
 def get_exclusion_repo(session: AsyncSession = Depends(get_session)) -> ExclusionRepo:

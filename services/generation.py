@@ -74,6 +74,13 @@ class EmailDraft(BaseModel):
     confidence: int = Field(description="0 to 100: how strong and well grounded the email is.")
 
 
+class FollowUpDraft(BaseModel):
+    """A follow-up's answer: the body of email 2 or 3. It replies in email 1's thread, so no subject."""
+
+    body: str = Field(description="The email body, from the greeting to the closing question, with no signature.")
+    confidence: int = Field(description="0 to 100: how natural and well grounded the follow-up is.")
+
+
 class EmailScore(BaseModel):
     """Email Scoring's answer on one draft."""
 
@@ -404,6 +411,19 @@ class EmailWriter:
                 except anthropic.APIError as exc:
                     draft.score_error = error_message(exc)
         return draft
+
+
+async def write_follow_up(writer: "EmailWriter", spec: PromptVersionSpec, user: str) -> tuple[FollowUpDraft | None, list[Call], str | None]:
+    """Email 2 or 3 from a filled follow-up prompt: (the follow-up or None, the Claude calls, why it failed)."""
+    draft = Draft()
+    try:
+        async with writer._gate:
+            result = await writer._ask(spec, user, "medium", FollowUpDraft, "followup", draft)
+        return result, draft.calls, None
+    except _Stop as exc:
+        return None, draft.calls, str(exc)
+    except anthropic.APIError as exc:
+        return None, draft.calls, error_message(exc)
 
 
 class _Stop(Exception):

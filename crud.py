@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
     Company, CompanyPage, Email, EmailFeedback, ExampleEmail, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
-    Exclusion, User, Workspace, WorkspaceCompany, WorkspaceMember,
+    Exclusion, User, Workspace, WorkspaceCompany, WorkspaceMember, FALLBACK_2, FALLBACK_3,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
 from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
@@ -450,6 +450,73 @@ class ExclusionRepo:
 
     async def match(self, keys: list[tuple[str, str]]) -> Exclusion | None:
         return await excluded(self.session, keys)
+
+
+class SendingRepo:
+    """Emails on their way through CheapSequencer: queueing the first email, tracking each lead's
+    enrollment, and the follow-ups written for it (`outreach.eo_emails`)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def to_queue(self, workspace_id: UUID, email_ids: list[UUID]) -> list[tuple[Email, Lead]]:
+        """These approved first emails, with their leads, that aren't queued yet."""
+        query = (
+            select(Email, Lead)
+            .join(Lead, Lead.id == Email.lead_id)
+            .where(Email.workspace_id == workspace_id, Email.id.in_(email_ids), Email.step == 1, Email.status == "approved")
+        )
+        return [(e, lead) for e, lead in await self.session.execute(query)]
+
+    async def mark_queued(self, emails: list[Email], campaign_id: str, list_id: str) -> None:
+        now = datetime.now(UTC)
+        for e in emails:
+            e.status, e.queued_at, e.sequencer_campaign_id, e.sequencer_list_id = "queued", now, campaign_id, list_id
+            e.sequence_status = "queued"
+        await self.session.commit()
+
+    async def in_sequence(self, workspace_id: UUID) -> list[tuple[Email, Lead]]:
+        """First emails queued into a campaign whose sequence hasn't ended."""
+        query = (
+            select(Email, Lead)
+            .join(Lead, Lead.id == Email.lead_id)
+            .where(
+                Email.workspace_id == workspace_id, Email.step == 1, Email.sequencer_campaign_id.is_not(None),
+                or_(Email.sequence_status.is_(None), Email.sequence_status.in_(("queued", "active"))),
+            )
+        )  # fmt: skip
+        return [(e, lead) for e, lead in await self.session.execute(query)]
+
+    async def follow_ups(self, lead_ids: list[UUID]) -> dict[tuple[UUID, int], Email]:
+        rows = await self.session.scalars(select(Email).where(Email.lead_id.in_(lead_ids), Email.step > 1))
+        return {(e.lead_id, e.step): e for e in rows}
+
+    async def add_follow_up(self, first: Email, step: int, body: str, version_id: UUID | None, confidence: int, cost: float) -> Email:
+        row = Email(
+            workspace_id=first.workspace_id, lead_id=first.lead_id, step=step, email_prompt_version_id=version_id,
+            subject="", body=body, confidence=max(0, min(100, confidence)), status="queued", cost_usd=cost,
+            queued_at=datetime.now(UTC), sequencer_campaign_id=first.sequencer_campaign_id,
+            sequencer_list_id=first.sequencer_list_id,
+        )  # fmt: skip
+        self.session.add(row)
+        await self.session.commit()
+        return row
+
+    async def hooks(self, lead_id: UUID) -> list[Insight]:
+        query = select(Insight).where(Insight.lead_id == lead_id).order_by(Insight.rank)
+        return list(await self.session.scalars(query))
+
+    async def commit(self) -> None:
+        await self.session.commit()
+
+    async def queued_counts(self, workspace_id: UUID) -> dict[str, int]:
+        """Leads queued into each CheapSequencer campaign."""
+        query = (
+            select(Email.sequencer_campaign_id, func.count())
+            .where(Email.workspace_id == workspace_id, Email.step == 1, Email.sequencer_campaign_id.is_not(None))
+            .group_by(Email.sequencer_campaign_id)
+        )
+        return {cid: n for cid, n in await self.session.execute(query)}
 
 
 class UserRepo:
@@ -1118,6 +1185,13 @@ class EmailRepo:
     async def leads(self, workspace_id: UUID, lead_ids: list[UUID]) -> list[Lead]:
         return list(await self.session.scalars(select(Lead).where(Lead.workspace_id == workspace_id, Lead.id.in_(lead_ids))))
 
+    async def in_sequence(self, workspace_id: UUID, lead_ids: list[UUID]) -> set[UUID]:
+        """Which of these leads already have an email queued or sent, so they aren't written to again."""
+        query = select(Email.lead_id).where(
+            Email.workspace_id == workspace_id, Email.lead_id.in_(lead_ids), Email.status.in_(("queued", "sent"))
+        )
+        return set(await self.session.scalars(query))
+
     async def company_for(self, workspace_id: UUID, lead: Lead) -> Company | None:
         """The pipeline company the lead was found at, else the one matching their Lead Intel company."""
         company = await self.session.scalar(
@@ -1190,7 +1264,12 @@ class EmailRepo:
     async def list(
         self, workspace_id: UUID, status: str | None = None, lead_id: UUID | None = None
     ) -> list[tuple[Email, Lead]]:
-        query = select(Email, Lead).join(Lead, Lead.id == Email.lead_id).where(Email.workspace_id == workspace_id)
+        # First emails only: follow-ups are written and queued on their own, never reviewed here.
+        query = (
+            select(Email, Lead)
+            .join(Lead, Lead.id == Email.lead_id)
+            .where(Email.workspace_id == workspace_id, Email.step == 1)
+        )
         if status:
             query = query.where(Email.status == status)
         if lead_id:
@@ -1288,6 +1367,10 @@ class FeedbackRepo:
 
 FEEDBACK_DEFAULTS = {"sample_examples": 3, "good_examples": 3, "bad_examples": 3, "improve_examples": 20}
 RESEARCH_DEFAULTS = {"research_max_pages": 6, "research_max_seconds": 120}
+SENDING_DEFAULTS: dict[str, Any] = {
+    "sender_company": "", "sender_address": "", "followup_fallback_2": FALLBACK_2, "followup_fallback_3": FALLBACK_3,
+    "followup_lead_hours": 24,
+}  # fmt: skip
 
 
 class SettingsRepo:
@@ -1321,6 +1404,14 @@ class SettingsRepo:
     async def save_feedback(self, workspace_id: UUID, values: dict[str, int]) -> dict[str, int]:
         await self._save(workspace_id, values)
         return await self.feedback(workspace_id)
+
+    async def sending(self, workspace_id: UUID) -> dict[str, Any]:
+        """Who the emails are from, the generic follow-ups, and how early follow-ups are written."""
+        return await self._get(workspace_id, SENDING_DEFAULTS)
+
+    async def save_sending(self, workspace_id: UUID, values: dict[str, Any]) -> dict[str, Any]:
+        await self._save(workspace_id, values)
+        return await self.sending(workspace_id)
 
     async def research(self, workspace_id: UUID) -> dict[str, int]:
         """How much of a company's website research may read."""

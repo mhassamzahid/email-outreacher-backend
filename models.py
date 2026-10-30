@@ -73,6 +73,12 @@ def _user_ref() -> Mapped[UUID | None]:
     return mapped_column(ForeignKey("eo_users.id", ondelete="SET NULL"), default=None)
 
 
+FALLBACK_2 = "Hi {{first_name}}, just bringing this back to the top of your inbox in case it got buried. Worth a look?"
+FALLBACK_3 = (
+    "Hi {{first_name}}, I'll leave it here so I'm not cluttering your inbox. If it's ever useful, just reply and I'll send the details."
+)
+
+
 class Base(DeclarativeBase):
     metadata = MetaData(schema=OUTREACH_SCHEMA, naming_convention=NAMING)
 
@@ -248,6 +254,7 @@ class Settings(Base):
         CheckConstraint("research_max_pages between 1 and 15", name="research_max_pages"),
         CheckConstraint("sample_examples between 0 and 10", name="sample_examples"),
         CheckConstraint("research_max_seconds between 30 and 600", name="research_max_seconds"),
+        CheckConstraint("followup_lead_hours between 2 and 72", name="followup_lead_hours"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(ForeignKey("eo_workspaces.id", ondelete="CASCADE"), primary_key=True)
@@ -271,6 +278,14 @@ class Settings(Base):
     # page, and the most time spent on one company.
     research_max_pages: Mapped[int] = mapped_column(SmallInteger, server_default="6")
     research_max_seconds: Mapped[int] = mapped_column(SmallInteger, server_default="120")
+    # Sending: who the emails are from (US law asks for a physical address), the generic follow-ups
+    # a lead holds until the personal one is written, and how many hours before a follow-up is due
+    # it gets written.
+    sender_company: Mapped[str] = mapped_column(Text, server_default="")
+    sender_address: Mapped[str] = mapped_column(Text, server_default="")
+    followup_fallback_2: Mapped[str] = mapped_column(Text, server_default=FALLBACK_2)
+    followup_fallback_3: Mapped[str] = mapped_column(Text, server_default=FALLBACK_3)
+    followup_lead_hours: Mapped[int] = mapped_column(SmallInteger, server_default="24")
     updated_at: Mapped[datetime] = _updated()
 
 
@@ -278,7 +293,7 @@ class Prompt(Base):
     __tablename__ = "eo_prompts"
     __table_args__ = (
         # verify: company verification, hook: hook selection, email: email generation, score: email scoring.
-        CheckConstraint(_in("kind", ("verify", "hook", "email", "score")), name="kind"),
+        CheckConstraint(_in("kind", ("verify", "hook", "email", "score", "followup2", "followup3")), name="kind"),
         # At most one default per kind in a workspace.
         Index(
             "eo_prompts_one_default_idx",
@@ -349,6 +364,8 @@ class IcpProfile(Base):
     enabled_sources: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
     # Null uses the workspace's default prompt of that kind.
     hook_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
+    # The CheapSequencer campaign this ICP's emails are queued into.
+    sequencer_campaign_id: Mapped[str | None] = mapped_column(Text, default=None)
     email_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
     verify_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
     # What we sell to this ICP (eo_products). Its details fill the {{product.*}} placeholders.
@@ -579,8 +596,10 @@ class Email(Base):
 
     __tablename__ = "eo_emails"
     __table_args__ = (
-        CheckConstraint(_in("status", ("draft", "edited", "approved", "sent", "skipped")), name="status"),
+        CheckConstraint(_in("status", ("draft", "edited", "approved", "queued", "sent", "skipped")), name="status"),
         CheckConstraint("sent_by is null or " + _in("sent_by", ("auto", "manual")), name="sent_by"),
+        CheckConstraint("step between 1 and 3", name="step"),
+        Index("eo_emails_sequence_idx", "workspace_id", "sequence_status", postgresql_where=text("sequence_status is not null")),
         CheckConstraint("relevance between 0 and 5", name="relevance"),
         CheckConstraint("confidence between 0 and 100", name="confidence"),
         Index("eo_emails_workspace_status_idx", "workspace_id", "status"),
@@ -610,9 +629,20 @@ class Email(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     sent_by: Mapped[str | None] = mapped_column(Text, default=None)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # 1 is the first email; 2 and 3 are the follow-ups, written only when they're nearly due.
+    step: Mapped[int] = mapped_column(SmallInteger, server_default="1")
     # Where CheapSequencer holds it once queued.
     sequencer_list_id: Mapped[str | None] = mapped_column(Text, default=None)
     sequencer_lead_id: Mapped[str | None] = mapped_column(Text, default=None)
+    sequencer_campaign_id: Mapped[str | None] = mapped_column(Text, default=None)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # On the step-1 email: where the lead's enrollment stands, as last read from CheapSequencer.
+    sequence_status: Mapped[str | None] = mapped_column(Text, default=None)  # active | stopped | completed | ...
+    sequence_sent_count: Mapped[int] = mapped_column(SmallInteger, server_default="0")
+    sequence_last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    sequence_stop_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    sequence_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    sequence_raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     # The rated emails shown to Claude as examples when this one was written (see EmailFeedback).
     examples_used: Mapped[list[UUID]] = mapped_column(ARRAY(Uuid), server_default="{}")
     created_at: Mapped[datetime] = _created()
