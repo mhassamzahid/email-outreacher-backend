@@ -13,7 +13,7 @@ from models import (
     Exclusion, User, Workspace, WorkspaceCompany, WorkspaceMember, FALLBACK_2, FALLBACK_3,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
-from services.cost_estimate import DEFAULT_ESTIMATE
+from services.cost_estimate import DEFAULT_ESTIMATE, upgrade as upgrade_estimate
 from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
 from services.google_places import Place
 from services.identity import identity_keys
@@ -866,8 +866,30 @@ class StakeholderRepo:
 class ProviderCallRepo:
     """The ledger of calls to paid providers. `outreach.eo_provider_calls`."""
 
+    # Measured per lead rather than per call: one email for a lead is several Claude calls.
+    PER_LEAD_ACTIONS = ("Write emails",)
+
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def claude_per_use(self, workspace_id: UUID, since: datetime) -> list[dict[str, Any]]:
+        """Average tokens and cost per use of each Claude operation since `since` (successful calls only)."""
+        query = (
+            select(
+                ProviderCall.action, func.count(), func.count(func.distinct(ProviderCall.lead_id)),
+                func.coalesce(func.sum(ProviderCall.input_tokens), 0), func.coalesce(func.sum(ProviderCall.output_tokens), 0),
+                func.coalesce(func.sum(ProviderCall.cost_usd), 0),
+            )
+            .where(ProviderCall.workspace_id == workspace_id, ProviderCall.provider == "claude", ProviderCall.status == "succeeded",
+                   ProviderCall.action.is_not(None), ProviderCall.called_at >= since)
+            .group_by(ProviderCall.action)
+        )  # fmt: skip
+        out = []
+        for action, calls, leads, tokens_in, tokens_out, cost in await self.session.execute(query):
+            uses = leads if action in self.PER_LEAD_ACTIONS and leads else calls
+            out.append({"action": action, "uses": uses, "tokens_in": round(tokens_in / uses), "tokens_out": round(tokens_out / uses),
+                        "cost_usd": round(float(cost) / uses, 6)})  # fmt: skip
+        return sorted(out, key=lambda r: r["action"])
 
     async def record(
         self,
@@ -1478,7 +1500,7 @@ class SettingsRepo:
     async def cost_estimate(self, workspace_id: UUID) -> dict[str, Any]:
         """The saved cost estimate, or the starting one while none is saved."""
         saved = (await self._get(workspace_id, {"cost_estimate": None}))["cost_estimate"]
-        return saved or DEFAULT_ESTIMATE
+        return upgrade_estimate(saved) if saved else DEFAULT_ESTIMATE
 
     async def save_cost_estimate(self, workspace_id: UUID, estimate: dict[str, Any]) -> dict[str, Any]:
         await self._save(workspace_id, {"cost_estimate": estimate})

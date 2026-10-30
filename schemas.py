@@ -476,16 +476,28 @@ class CampaignSyncOut(ApiModel):
 
 # ---------- Cost estimator ----------
 
-CostUnit = Literal["month", "lead", "email"]
+# How an item's quantity counts: per lead contacted, per month, or per email sent.
+CostBasis = Literal["lead", "month", "email"]
 
 
 class CostItem(ApiModel):
+    """One thing that costs money: an operation (an email written, a post fetched, a company verified...)
+    or a subscription. A month costs price x quantity, times leads or emails sent for those bases."""
+
     id: str = Field(min_length=1, max_length=40)
     name: str = Field(min_length=1, max_length=80)
     category: str = Field(default="Other", max_length=40)
-    # month: a fixed monthly amount; lead: per lead contacted; email: per email sent.
-    unit: CostUnit
-    amount_usd: float = Field(ge=0, le=1_000_000)
+    # What one use is, like "per post" or "per email written".
+    unit_label: str = Field(default="per month", max_length=40)
+    price_usd: float = Field(ge=0, le=1_000_000)
+    quantity: float = Field(default=1, ge=0, le=10_000_000)
+    basis: CostBasis = "month"
+    # Claude operations: the price is worked out from tokens per use and the model's price per token.
+    model: str | None = Field(default=None, max_length=60)
+    tokens_in: int | None = Field(default=None, ge=0, le=10_000_000)
+    tokens_out: int | None = Field(default=None, ge=0, le=10_000_000)
+    # The Usage log action it's measured against, like "Write emails".
+    action: str | None = Field(default=None, max_length=60)
     note: str = Field(default="", max_length=300)
     enabled: bool = True
 
@@ -496,7 +508,29 @@ class CostEstimate(ApiModel):
     emails_per_lead: float = Field(ge=0, le=10)
     # Replies per 100 leads, for the cost per reply. 0 until you set it.
     reply_rate_pct: float = Field(ge=0, le=100)
-    items: list[CostItem] = Field(max_length=60)
+    items: list[CostItem] = Field(max_length=80)
+
+
+class ClaudePrice(ApiModel):
+    model: str
+    input_per_mtok: float  # USD per million input tokens
+    output_per_mtok: float
+
+
+class MeasuredUse(ApiModel):
+    """A Claude operation's average from the Usage log: per lead for emails, per call otherwise."""
+
+    action: str
+    uses: int
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float
+
+
+class CostReference(ApiModel):
+    claude_prices: list[ClaudePrice]
+    measured: list[MeasuredUse]
+    since: datetime
 
 
 class FollowUpRunOut(ApiModel):

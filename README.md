@@ -142,7 +142,8 @@ Admins open every workspace and manage users and workspaces; Management and admi
 | PUT/DELETE | `/api/v1/examples/{id}` | Edit or delete an example |
 | POST | `/api/v1/examples/from-email/{emailId}` | Save a generated email (with edits) as an example for its lead's ICP |
 | GET | `/api/v1/usage` | Spend over `days` (default 30): Claude tokens and estimated dollars, Apollo credits, Apify dollars; per provider, per action, and the latest 100 calls |
-| GET, PUT | `/api/v1/settings/cost-estimate` | The cost estimator: leads a month, emails per lead, reply rate and the cost items (name, category, per month / per lead / per email sent, amount, note). Starts with only sourced prices filled in. Saving needs Management or Admin |
+| GET, PUT | `/api/v1/settings/cost-estimate` | The cost estimator: leads a month, emails per lead, reply rate, and one line per thing that costs money (email generation, follow-ups, company verification, Google Maps searches, Apollo reveals, Apify posts and profiles, subscriptions...). Each line has a price per use and how many uses per lead, a month or per email sent; Claude lines are priced from tokens per use and the chosen model. Starts with only sourced prices filled in. Saving needs Management or Admin |
+| GET | `/api/v1/settings/cost-estimate/reference` | Each Claude model's price per token, and the workspace's measured tokens per use of each Claude operation over the last 90 days |
 | GET | `/api/v1/leads/template.csv` | CSV template with the columns the import reads |
 | GET | `/api/v1/leads` | Leads in a workspace (`icpId`, `status`, `q`, `limit`, `offset`), each with `postCount` |
 | POST | `/api/v1/leads` | Add one lead by hand; 409 if it's a duplicate |

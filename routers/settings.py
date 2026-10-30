@@ -1,14 +1,16 @@
 """Workspace settings: how many rated emails Claude learns from, how much of a website research reads,
 and the cost estimator."""
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from crud import SettingsRepo
-from dependencies import get_settings_repo, require_manager, require_workspace_id
-from schemas import CostEstimate, FeedbackSettings, ResearchSettings
+from crud import ProviderCallRepo, SettingsRepo
+from dependencies import get_provider_call_repo, get_settings_repo, require_manager, require_workspace_id
+from schemas import ClaudePrice, CostEstimate, CostReference, FeedbackSettings, MeasuredUse, ResearchSettings
 from services.auth import CurrentUser
+from services.claude import PRICES
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -74,3 +76,20 @@ async def save_cost_estimate(
     if len({item.id for item in body.items}) != len(body.items):
         raise HTTPException(status_code=422, detail="Each cost item needs its own id")
     return CostEstimate(**await settings.save_cost_estimate(workspace_id, body.model_dump()))
+
+
+MEASURED_DAYS = 90
+
+
+@router.get("/cost-estimate/reference", response_model=CostReference)
+async def cost_reference(
+    workspace_id: UUID = Depends(require_workspace_id), calls: ProviderCallRepo = Depends(get_provider_call_repo)
+) -> CostReference:
+    """What the estimator prices Claude with: each model's price per token, and the workspace's measured
+    tokens per use of each Claude operation over the last 90 days."""
+    since = datetime.now(UTC) - timedelta(days=MEASURED_DAYS)
+    return CostReference(
+        claude_prices=[ClaudePrice(model=m, input_per_mtok=p_in, output_per_mtok=p_out) for m, (p_in, p_out) in PRICES.items()],
+        measured=[MeasuredUse(**m) for m in await calls.claude_per_use(workspace_id, since)],
+        since=since,
+    )
