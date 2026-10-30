@@ -199,7 +199,8 @@ def _message(response: httpx.Response) -> str:
 
 
 class PlacesClient:
-    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None, endpoint: str = ENDPOINT) -> None:
+        self._endpoint = endpoint
         self._client = httpx.AsyncClient(timeout=20, transport=transport, headers={"X-Goog-Api-Key": api_key})
 
     async def aclose(self) -> None:
@@ -207,7 +208,7 @@ class PlacesClient:
 
     async def _post(self, fields: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
-            response = await self._client.post(ENDPOINT, json=body, headers={"X-Goog-FieldMask": fields})
+            response = await self._client.post(self._endpoint, json=body, headers={"X-Goog-FieldMask": fields})
         except httpx.HTTPError as exc:
             raise PlacesError(f"Couldn't reach Google Places: {exc.__class__.__name__}") from exc
         if response.status_code >= 400:

@@ -90,9 +90,9 @@ def _message(response: httpx.Response) -> str:
 
 
 class ApolloClient:
-    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None, base_url: str = BASE_URL) -> None:
         self._client = httpx.AsyncClient(
-            base_url=BASE_URL,
+            base_url=base_url,
             headers={"x-api-key": api_key, "Cache-Control": "no-cache", "accept": "application/json"},
             timeout=30,
             transport=transport,

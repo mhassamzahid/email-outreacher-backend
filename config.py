@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     cheapinboxes_api_key: str | None = None
     cheapsequencer_webhook_secret: str | None = None
 
+    # Where each outside service is reached. The defaults are the providers' public APIs; point one at a
+    # proxy or a test server by setting it.
+    cheapsequencer_api_url: str = "https://api.cheapsequencer.com/v1"
+    cheapinboxes_api_url: str = "https://api.cheapinboxes.com"
+    apollo_api_url: str = "https://api.apollo.io/api/v1"
+    apify_api_url: str = "https://api.apify.com/v2"
+    google_places_url: str = "https://places.googleapis.com/v1/places:searchText"
+    jina_reader_url: str = "https://r.jina.ai/"
+    # Anthropic's API; empty means the SDK's own default.
+    anthropic_base_url: str | None = None
+    # The page named in the website reader's User-Agent, for site owners who want to know who's reading.
+    bot_info_url: str = "https://aheadtech360.com"
+
     @property
     def auth_issuer(self) -> str:
         return f"{(self.supabase_url or '').rstrip('/')}/auth/v1"

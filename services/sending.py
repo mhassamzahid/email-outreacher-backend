@@ -67,8 +67,8 @@ class _Client:
 class SequencerClient(_Client):
     service = "CheapSequencer"
 
-    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        super().__init__(SEQUENCER_URL, api_key, transport)
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None, base_url: str = SEQUENCER_URL) -> None:
+        super().__init__(base_url, api_key, transport)
 
     async def all(self, path: str) -> list[dict[str, Any]]:
         """Every row of a list endpoint, following its cursor."""
@@ -221,8 +221,8 @@ class SequencerClient(_Client):
 class InboxesClient(_Client):
     service = "CheapInboxes"
 
-    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        super().__init__(INBOXES_URL, api_key, transport)
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None, base_url: str = INBOXES_URL) -> None:
+        super().__init__(base_url, api_key, transport)
 
     async def domains(self) -> list[dict[str, Any]]:
         return (await self.get("/v1/domains")).get("domains") or []

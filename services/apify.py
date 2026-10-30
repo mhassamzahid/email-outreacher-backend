@@ -172,9 +172,11 @@ def _date(value: Any) -> datetime | None:
 
 
 class ApifyClient:
-    def __init__(self, token: str, transport: httpx.AsyncBaseTransport | None = None, poll_seconds: float = 5) -> None:
+    def __init__(
+        self, token: str, transport: httpx.AsyncBaseTransport | None = None, poll_seconds: float = 5, base_url: str = BASE_URL
+    ) -> None:
         self._client = httpx.AsyncClient(
-            base_url=BASE_URL, headers={"Authorization": f"Bearer {token}"}, timeout=90, transport=transport
+            base_url=base_url, headers={"Authorization": f"Bearer {token}"}, timeout=90, transport=transport
         )
         self._poll = poll_seconds
 

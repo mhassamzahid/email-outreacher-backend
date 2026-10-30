@@ -122,7 +122,9 @@ class JinaClient:
         transport: httpx.AsyncBaseTransport | None = None,
         limiter: RateLimiter | None = None,
         sleep=asyncio.sleep,
+        reader_url: str = READER_URL,
     ) -> None:
+        self._reader_url = reader_url
         headers = {
             "Accept": "application/json",
             "X-With-Links-Summary": "all",
@@ -142,7 +144,7 @@ class JinaClient:
         for attempt in range(MAX_RETRIES + 1):
             await self._limiter.wait_turn()
             try:
-                response = await self._client.get(READER_URL + url)
+                response = await self._client.get(self._reader_url + url)
             except httpx.HTTPError as exc:
                 if attempt == MAX_RETRIES:
                     raise JinaError(f"Couldn't reach Jina: {exc}") from exc

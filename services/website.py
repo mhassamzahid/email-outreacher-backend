@@ -30,7 +30,15 @@ import httpx
 from services.contacts import contact_links, founder_names
 from services.jina import JinaClient, JinaError
 
-USER_AGENT = "AheadTech360LeadBot/1.0 (+https://aheadtech360.com)"
+BOT_INFO_URL = "https://aheadtech360.com"
+
+
+def user_agent(info_url: str = BOT_INFO_URL) -> str:
+    """Who's reading, with a page site owners can open to find out more."""
+    return f"AheadTech360LeadBot/1.0 (+{info_url})"
+
+
+USER_AGENT = user_agent()
 ROBOTS_TOKEN = "AheadTech360LeadBot"
 REQUEST_TIMEOUT = 15.0
 BUDGET_SECONDS = 30.0
@@ -206,9 +214,10 @@ class WebsiteReader:
         transport: httpx.AsyncBaseTransport | None = None,
         sleep=asyncio.sleep,
         clock=time.monotonic,
+        bot_info_url: str = BOT_INFO_URL,
     ) -> None:
         self._client = httpx.AsyncClient(
-            headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+            headers={"User-Agent": user_agent(bot_info_url), "Accept": "text/html,application/xhtml+xml"},
             timeout=REQUEST_TIMEOUT,
             follow_redirects=True,
             max_redirects=5,

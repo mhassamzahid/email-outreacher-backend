@@ -159,7 +159,7 @@ async def get_optional_writer() -> AsyncIterator[EmailWriter | None]:
     if not key:
         yield None
         return
-    writer = EmailWriter(key)
+    writer = EmailWriter(key, base_url=get_settings().anthropic_base_url)
     try:
         yield writer
     finally:
@@ -175,7 +175,7 @@ async def get_optional_anthropic() -> AsyncIterator[anthropic.AsyncAnthropic | N
     if not key:
         yield None
         return
-    client = anthropic.AsyncAnthropic(api_key=key, max_retries=4, timeout=300.0)
+    client = anthropic.AsyncAnthropic(api_key=key, base_url=get_settings().anthropic_base_url, max_retries=4, timeout=300.0)
     try:
         yield client
     finally:
@@ -206,7 +206,7 @@ async def get_apollo() -> AsyncIterator[ApolloClient]:
     key = get_settings().apollo_api_key
     if not key:
         raise HTTPException(status_code=503, detail="APOLLO_API_KEY is not set")
-    client = ApolloClient(key)
+    client = ApolloClient(key, base_url=get_settings().apollo_api_url)
     try:
         yield client
     finally:
@@ -225,7 +225,7 @@ async def get_apify() -> AsyncIterator[ApifyClient]:
     token = get_settings().apify_token
     if not token:
         raise HTTPException(status_code=503, detail="APIFY_TOKEN is not set")
-    client = ApifyClient(token)
+    client = ApifyClient(token, base_url=get_settings().apify_api_url)
     try:
         yield client
     finally:
@@ -238,7 +238,7 @@ def get_company_repo(session: AsyncSession = Depends(get_session)) -> CompanyRep
 
 async def get_optional_apollo() -> AsyncIterator[ApolloClient | None]:
     key = get_settings().apollo_api_key
-    client = ApolloClient(key) if key else None
+    client = ApolloClient(key, base_url=get_settings().apollo_api_url) if key else None
     try:
         yield client
     finally:
@@ -248,7 +248,7 @@ async def get_optional_apollo() -> AsyncIterator[ApolloClient | None]:
 
 async def get_optional_apify() -> AsyncIterator[ApifyClient | None]:
     token = get_settings().apify_token
-    client = ApifyClient(token) if token else None
+    client = ApifyClient(token, base_url=get_settings().apify_api_url) if token else None
     try:
         yield client
     finally:
@@ -258,7 +258,7 @@ async def get_optional_apify() -> AsyncIterator[ApifyClient | None]:
 
 async def get_optional_places() -> AsyncIterator[PlacesClient | None]:
     key = get_settings().google_places_api_key
-    client = PlacesClient(key) if key else None
+    client = PlacesClient(key, endpoint=get_settings().google_places_url) if key else None
     try:
         yield client
     finally:
@@ -268,7 +268,7 @@ async def get_optional_places() -> AsyncIterator[PlacesClient | None]:
 
 async def get_optional_sequencer() -> AsyncIterator[SequencerClient | None]:
     key = get_settings().cheapsequencer_api_key
-    client = SequencerClient(key) if key else None
+    client = SequencerClient(key, base_url=get_settings().cheapsequencer_api_url) if key else None
     try:
         yield client
     finally:
@@ -278,7 +278,7 @@ async def get_optional_sequencer() -> AsyncIterator[SequencerClient | None]:
 
 async def get_optional_inboxes() -> AsyncIterator[InboxesClient | None]:
     key = get_settings().cheapinboxes_api_key
-    client = InboxesClient(key) if key else None
+    client = InboxesClient(key, base_url=get_settings().cheapinboxes_api_url) if key else None
     try:
         yield client
     finally:
@@ -288,8 +288,8 @@ async def get_optional_inboxes() -> AsyncIterator[InboxesClient | None]:
 
 async def get_website_reader() -> AsyncIterator[WebsiteReader]:
     settings = get_settings()
-    jina = JinaClient(settings.jina_api_key, settings.jina_rpm)
-    reader = WebsiteReader(jina=jina)
+    jina = JinaClient(settings.jina_api_key, settings.jina_rpm, reader_url=settings.jina_reader_url)
+    reader = WebsiteReader(jina=jina, bot_info_url=settings.bot_info_url)
     try:
         yield reader
     finally:
@@ -299,7 +299,11 @@ async def get_website_reader() -> AsyncIterator[WebsiteReader]:
 
 async def get_optional_scorer() -> AsyncIterator[CompanyScorer | None]:
     settings = get_settings()
-    scorer = CompanyScorer(settings.anthropic_api_key, settings.claude_scoring_model) if settings.anthropic_api_key else None
+    scorer = (
+        CompanyScorer(settings.anthropic_api_key, settings.claude_scoring_model, base_url=settings.anthropic_base_url)
+        if settings.anthropic_api_key
+        else None
+    )
     try:
         yield scorer
     finally:

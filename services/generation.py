@@ -325,8 +325,11 @@ def _has_material(ctx: LeadContext, items: list[Item]) -> bool:
 
 
 class EmailWriter:
-    def __init__(self, api_key: str, client: anthropic.AsyncAnthropic | None = None, concurrency: int = 3) -> None:
-        self._client = client or anthropic.AsyncAnthropic(api_key=api_key, max_retries=4, timeout=180.0)
+    def __init__(
+        self, api_key: str, client: anthropic.AsyncAnthropic | None = None, concurrency: int = 3, base_url: str | None = None
+    ) -> None:
+        # base_url None: the SDK's own default.
+        self._client = client or anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url, max_retries=4, timeout=180.0)
         self._gate = asyncio.Semaphore(concurrency)
 
     async def aclose(self) -> None:

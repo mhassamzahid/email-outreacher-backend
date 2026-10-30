@@ -92,8 +92,11 @@ def default_spec(model: str) -> PromptSpec:
 
 
 class CompanyScorer:
-    def __init__(self, api_key: str, model: str, client: anthropic.AsyncAnthropic | None = None, concurrency: int = 4) -> None:
-        self._client = client or anthropic.AsyncAnthropic(api_key=api_key, max_retries=4, timeout=120.0)
+    def __init__(
+        self, api_key: str, model: str, client: anthropic.AsyncAnthropic | None = None, concurrency: int = 4,
+        base_url: str | None = None,
+    ) -> None:
+        self._client = client or anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url, max_retries=4, timeout=120.0)
         self._model = model
         self._gate = asyncio.Semaphore(concurrency)
 
