@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dependencies import (
-    get_current_user, get_exclusion_repo, get_icp_profile_repo, get_lead_intel_repo, get_optional_inboxes, get_optional_sequencer,
+    get_current_user, get_exclusion_repo, get_icp_campaign_repo, get_icp_profile_repo, get_lead_intel_repo, get_optional_inboxes, get_optional_sequencer,
     get_workspace_company_repo,
 )  # fmt: skip
 from main import app
@@ -184,9 +184,24 @@ def no_real_sending(monkeypatch):
     monkeypatch.setattr(get_settings(), "cheapinboxes_api_key", None)
     app.dependency_overrides[get_optional_sequencer] = lambda: None
     app.dependency_overrides[get_optional_inboxes] = lambda: None
+    links = FakeIcpCampaigns()
+    app.dependency_overrides[get_icp_campaign_repo] = lambda: links
     yield
-    for dep in (get_optional_sequencer, get_optional_inboxes):
+    for dep in (get_optional_sequencer, get_optional_inboxes, get_icp_campaign_repo):
         app.dependency_overrides.pop(dep, None)
+
+
+class FakeIcpCampaigns:
+    """eo_icp_campaigns in memory."""
+
+    def __init__(self) -> None:
+        self.rows: dict[UUID, str] = {}
+
+    async def all(self) -> dict[UUID, str]:
+        return dict(self.rows)
+
+    async def link(self, icp_id: UUID, campaign_id: str) -> None:
+        self.rows[icp_id] = campaign_id
 
 
 @pytest.fixture

@@ -12,6 +12,7 @@ from crud import (
     EmailRepo,
     ExampleRepo,
     ExclusionRepo,
+    IcpCampaignRepo,
     FeedbackRepo,
     IcpProfileRepo,
     LeadRepo,
@@ -102,6 +103,10 @@ def require_workspace_id(workspace_id: UUID | None = Depends(get_workspace_id)) 
     if workspace_id is None:
         raise HTTPException(status_code=400, detail="X-Workspace-Id header is required")
     return workspace_id
+
+
+def get_icp_campaign_repo(session: AsyncSession = Depends(get_session)) -> IcpCampaignRepo:
+    return IcpCampaignRepo(session)
 
 
 def get_icp_profile_repo(session: AsyncSession = Depends(get_session)) -> IcpProfileRepo:

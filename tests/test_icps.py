@@ -107,6 +107,22 @@ def test_create_icp_with_lead_intel_fields(client, writer) -> None:
     assert row["created_by"] is not None and row["min_followers"] == 100
 
 
+def test_creating_an_icp_sets_up_its_campaign(client, writer) -> None:
+    from dependencies import get_optional_sequencer
+    from main import app
+    from services.sending import SendingError
+
+    class Down:
+        async def campaigns(self):
+            raise SendingError("Couldn't reach CheapSequencer: ConnectError")
+
+    app.dependency_overrides[get_optional_sequencer] = lambda: Down()
+    created = client.post("/api/v1/icps", json=NEW_ICP)
+    # The ICP is still made; the campaign problem is reported, not raised.
+    assert created.status_code == 201 and len(writer.added) == 1
+    assert created.json()["campaignNote"].startswith("Campaign not set up: Couldn't reach CheapSequencer")
+
+
 def test_create_icp_validation(client, writer) -> None:
     assert client.post("/api/v1/icps", json={**NEW_ICP, "name": "Med Spas"}).status_code == 409
     assert client.post("/api/v1/icps", json={**NEW_ICP, "industry": "  "}).status_code == 422

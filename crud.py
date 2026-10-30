@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
-    Company, CompanyPage, Email, EmailFeedback, ExampleEmail, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
+    Company, CompanyPage, Email, EmailFeedback, ExampleEmail, IcpCampaign, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
     Exclusion, User, Workspace, WorkspaceCompany, WorkspaceMember, FALLBACK_2, FALLBACK_3,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
@@ -18,6 +18,24 @@ from services.google_places import Place
 from services.identity import identity_keys
 from services.leads import Existing, LeadInput
 from services.prompts import DEFAULTS
+
+
+class IcpCampaignRepo:
+    """Which CheapSequencer campaign each ICP's leads go into (outreach.eo_icp_campaigns only)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def all(self) -> dict[UUID, str]:
+        return {row.lead_intel_icp_id: row.campaign_id for row in await self.session.scalars(select(IcpCampaign))}
+
+    async def link(self, icp_id: UUID, campaign_id: str) -> None:
+        row = await self.session.get(IcpCampaign, icp_id)
+        if row is None:
+            self.session.add(IcpCampaign(lead_intel_icp_id=icp_id, campaign_id=campaign_id))
+        else:
+            row.campaign_id = campaign_id
+        await self.session.commit()
 
 
 class IcpProfileRepo:

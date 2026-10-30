@@ -102,6 +102,8 @@ class Icp(ApiModel):
     created_at: datetime
     updated_at: datetime
     profile: IcpProfileOut | None = None
+    # After a create or rename: what happened to its CheapSequencer campaign.
+    campaign_note: str | None = None
 
 
 # ---------- Companies ----------
@@ -464,6 +466,12 @@ class ReplyMessageOut(ApiModel):
 
 class ReplyThreadDetailOut(ReplyThreadOut):
     messages: list[ReplyMessageOut]
+
+
+class CampaignSyncOut(ApiModel):
+    icp: str
+    status: str  # created | renamed | linked | unchanged | skipped
+    note: str
 
 
 class FollowUpRunOut(ApiModel):

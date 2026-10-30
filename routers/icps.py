@@ -3,11 +3,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from config import get_settings
-from crud import IcpProfileRepo, ProductRepo, PromptRepo
+from crud import IcpCampaignRepo, IcpProfileRepo, ProductRepo, PromptRepo
 from dependencies import (
+    get_icp_campaign_repo,
     get_icp_profile_repo,
     get_lead_intel_icp_writer,
     get_lead_intel_repo,
+    get_optional_sequencer,
     get_product_repo,
     get_prompt_repo,
     get_workspace_id,
@@ -17,6 +19,8 @@ from dependencies import (
 from lead_intel import LeadIntelRepo
 from lead_intel_writes import LeadIntelIcpWriter
 from schemas import ICP_SOURCES, Icp, IcpCreateIn, IcpProfileIn, IcpProfileOut
+from services import outreach
+from services.sending import SendingError, SequencerClient
 
 
 router = APIRouter(prefix="/icps", tags=["icps"])
@@ -63,10 +67,22 @@ def _validated(body: IcpCreateIn) -> dict:
     }
 
 
+async def _campaign_note(sequencer: SequencerClient | None, links: IcpCampaignRepo, icp_id: UUID, name: str) -> str | None:
+    """Give the ICP its CheapSequencer campaign. A failure never undoes the ICP; it's reported instead."""
+    if sequencer is None:
+        return None
+    try:
+        return (await outreach.ensure_campaign(sequencer, links, icp_id, name)).note
+    except SendingError as exc:
+        return f"Campaign not set up: {exc.message} Use \"Set up campaigns\" on the Mailboxes page to try again."
+
+
 @router.post("", response_model=Icp, status_code=201)
 async def create_icp(
     body: IcpCreateIn,
     writer: LeadIntelIcpWriter = Depends(get_lead_intel_icp_writer),
+    sequencer: SequencerClient | None = Depends(get_optional_sequencer),
+    links: IcpCampaignRepo = Depends(get_icp_campaign_repo),
     _: object = Depends(require_manager),
 ) -> Icp:
     """Add a new ICP to Lead Intel's icps table, which this app keeps using after Lead Intel shuts down.
@@ -78,7 +94,8 @@ async def create_icp(
     if await writer.name_taken(values["name"]):
         raise HTTPException(status_code=409, detail="An ICP with this name already exists in Lead Intel")
     row = await writer.add_icp(created_by, values)
-    return Icp.model_validate({**row, "company_count": 0, "profile": None})
+    note = await _campaign_note(sequencer, links, row["id"], row["name"])
+    return Icp.model_validate({**row, "company_count": 0, "profile": None, "campaign_note": note})
 
 
 @router.put("/{icp_id}", response_model=Icp)
@@ -89,6 +106,8 @@ async def update_icp(
     writer: LeadIntelIcpWriter = Depends(get_lead_intel_icp_writer),
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
     profiles: IcpProfileRepo = Depends(get_icp_profile_repo),
+    sequencer: SequencerClient | None = Depends(get_optional_sequencer),
+    links: IcpCampaignRepo = Depends(get_icp_campaign_repo),
     _: object = Depends(require_manager),
 ) -> Icp:
     """Edit an ICP's own fields in Lead Intel's icps table (shared: Lead Intel sees the change too).
@@ -101,7 +120,8 @@ async def update_icp(
     # Read it back the usual way, so the answer matches GET /icps/{id} (company count, profile).
     row = await lead_intel.get_icp(icp_id)
     by_id = await profiles.get_many(workspace_id, [icp_id]) if workspace_id else {}
-    return Icp.model_validate({**row, "profile": by_id.get(icp_id)})
+    note = await _campaign_note(sequencer, links, icp_id, row["name"])
+    return Icp.model_validate({**row, "profile": by_id.get(icp_id), "campaign_note": note})
 
 
 @router.get("/{icp_id}", response_model=Icp)

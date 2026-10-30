@@ -156,6 +156,17 @@ class Exclusion(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class IcpCampaign(Base):
+    """The CheapSequencer campaign an ICP's leads are queued into ("Coldbrew: <ICP>"). One CheapSequencer
+    account serves every workspace, so it's per ICP. A workspace can still pick another on the ICP profile."""
+
+    __tablename__ = "eo_icp_campaigns"
+
+    lead_intel_icp_id: Mapped[UUID] = mapped_column(primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created()
+
+
 class WorkspaceCompany(Base):
     """A Lead Intel business pulled into a workspace. Only the link is stored; the company stays in Lead Intel."""
 

@@ -148,6 +148,7 @@ class Deps:
     lead_intel: Any  # LeadIntelRepo
     sequencer: Any  # SequencerClient
     writer: Any = None  # EmailWriter, for follow-ups
+    links: Any = None  # IcpCampaignRepo
 
 
 async def campaign_for_icps(deps: Deps, icp_ids: set[UUID]) -> dict[UUID, tuple[str, str]]:
@@ -156,15 +157,62 @@ async def campaign_for_icps(deps: Deps, icp_ids: set[UUID]) -> dict[UUID, tuple[
     by_name = {c.get("name"): c for c in campaigns}
     by_id = {c.get("id"): c for c in campaigns}
     profiles = await deps.profiles.get_many(deps.workspace_id, list(icp_ids))
+    links = await deps.links.all() if deps.links else {}
     out: dict[UUID, tuple[str, str]] = {}
     for icp_id in icp_ids:
-        chosen = by_id.get(getattr(profiles.get(icp_id), "sequencer_campaign_id", None))
+        chosen = by_id.get(getattr(profiles.get(icp_id), "sequencer_campaign_id", None)) or by_id.get(links.get(icp_id))
         if chosen is None:
             icp = await deps.lead_intel.get_icp(icp_id)
             chosen = by_name.get(f"{CAMPAIGN_PREFIX}{icp['name']}") if icp else None
         if chosen:
             out[icp_id] = (chosen["id"], chosen.get("name") or "")
     return out
+
+
+@dataclass
+class CampaignOutcome:
+    status: str  # created | renamed | linked | unchanged | skipped
+    campaign: str
+    reason: str | None = None
+
+    @property
+    def note(self) -> str:
+        said = {
+            "created": f'Campaign "{self.campaign}" created in CheapSequencer as a draft, copied from an existing one.',
+            "renamed": f'Its campaign was renamed to "{self.campaign}".',
+            "linked": f'Linked to the campaign "{self.campaign}".',
+            "unchanged": f'Its campaign is "{self.campaign}".',
+        }
+        return said.get(self.status) or f"Campaign not set up: {self.reason}"
+
+
+async def ensure_campaign(sequencer: Any, links: Any, icp_id: UUID, icp_name: str) -> CampaignOutcome:
+    """Give an ICP its "Coldbrew: <ICP>" campaign: rename the linked one if the ICP was renamed, link one
+    that already has the name, or make a draft copy of another Coldbrew campaign (steps, mailboxes,
+    schedule, signature; no leads). Never activates anything."""
+    wanted = f"{CAMPAIGN_PREFIX}{icp_name.strip()}"
+    campaigns = [c for c in await sequencer.campaigns() if c.get("status") != "archived"]
+    by_id = {c["id"]: c for c in campaigns}
+    linked = by_id.get((await links.all()).get(icp_id))
+    if linked:
+        if linked.get("name") == wanted:
+            return CampaignOutcome("unchanged", wanted)
+        if linked.get("status") not in ("draft", "paused"):
+            return CampaignOutcome("skipped", linked.get("name") or "", "it's sending, so it keeps its name. Pause it in CheapSequencer and save the ICP again to rename it.")
+        _, etag = await sequencer.campaign(linked["id"])
+        await sequencer.rename(linked["id"], wanted, etag, key_for("rename", linked["id"], wanted))
+        return CampaignOutcome("renamed", wanted)
+    if named := next((c for c in campaigns if c.get("name") == wanted), None):
+        await links.link(icp_id, named["id"])
+        return CampaignOutcome("linked", wanted)
+    templates = sorted((c for c in campaigns if (c.get("name") or "").startswith(CAMPAIGN_PREFIX)), key=lambda c: c.get("name") or "")
+    if not templates:
+        return CampaignOutcome("skipped", wanted, "there's no Coldbrew campaign in CheapSequencer to copy the settings from.")
+    copy = await sequencer.duplicate(templates[0]["id"], key_for("duplicate", icp_id, templates[0]["id"]))
+    await links.link(icp_id, copy["id"])  # linked first, so a failed rename is finished by the next save, not copied again
+    _, etag = await sequencer.campaign(copy["id"])
+    await sequencer.rename(copy["id"], wanted, etag, key_for("rename", copy["id"], wanted))
+    return CampaignOutcome("created", wanted)
 
 
 @dataclass

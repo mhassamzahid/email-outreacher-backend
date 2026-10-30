@@ -13,7 +13,7 @@ from sqlalchemy import select, text
 
 from config import get_settings
 from crud import (
-    ExampleRepo, ExclusionRepo, IcpProfileRepo, ProductRepo, PromptRepo, ProviderCallRepo, SendingRepo, SettingsRepo,
+    ExampleRepo, ExclusionRepo, IcpCampaignRepo, IcpProfileRepo, ProductRepo, PromptRepo, ProviderCallRepo, SendingRepo, SettingsRepo,
 )  # fmt: skip
 from database import get_engine, get_sessionmaker
 from lead_intel import LeadIntelRepo
@@ -44,7 +44,7 @@ async def deps_for(workspace_id: UUID) -> AsyncIterator[outreach.Deps]:
                 yield outreach.Deps(
                     workspace_id, SendingRepo(session), SettingsRepo(session), IcpProfileRepo(session), PromptRepo(session),
                     ProductRepo(session), ExampleRepo(session), ExclusionRepo(session), ProviderCallRepo(session),
-                    LeadIntelRepo(conn), sequencer, writer,
+                    LeadIntelRepo(conn), sequencer, writer, IcpCampaignRepo(session),
                 )  # fmt: skip
             finally:
                 await conn.rollback()

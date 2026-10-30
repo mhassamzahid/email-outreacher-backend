@@ -11,16 +11,16 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from crud import (
-    ExampleRepo, ExclusionRepo, IcpProfileRepo, ProductRepo, PromptRepo, ProviderCallRepo, SendingRepo, SettingsRepo,
+    ExampleRepo, ExclusionRepo, IcpCampaignRepo, IcpProfileRepo, ProductRepo, PromptRepo, ProviderCallRepo, SendingRepo, SettingsRepo,
 )  # fmt: skip
 from dependencies import (
-    get_example_repo, get_exclusion_repo, get_icp_profile_repo, get_lead_intel_repo, get_optional_sequencer,
+    get_example_repo, get_exclusion_repo, get_icp_campaign_repo, get_icp_profile_repo, get_lead_intel_repo, get_optional_sequencer,
     get_optional_writer, get_product_repo, get_prompt_repo, get_provider_call_repo, get_sending_repo, get_settings_repo,
     require_manager, require_workspace_id,
 )  # fmt: skip
 from lead_intel import LeadIntelRepo
 from schemas import (
-    FollowUpRunOut, OutboxRowOut, OutboxStepOut, QueueIn, QueueOut, QueueOutcomeOut, ReplyMessageOut, ReplyThreadDetailOut,
+    CampaignSyncOut, FollowUpRunOut, OutboxRowOut, OutboxStepOut, QueueIn, QueueOut, QueueOutcomeOut, ReplyMessageOut, ReplyThreadDetailOut,
     ReplyThreadOut, SendingCampaignOut, SendingSettingsIn, SendingSettingsOut, TemplateOutcomeOut,
 )  # fmt: skip
 from services import outreach
@@ -50,9 +50,10 @@ async def _deps(
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
     sequencer: SequencerClient | None = Depends(get_optional_sequencer),
     writer: EmailWriter | None = Depends(get_optional_writer),
+    links: IcpCampaignRepo = Depends(get_icp_campaign_repo),
 ) -> outreach.Deps:
     return outreach.Deps(workspace_id, sending, settings, profiles, prompts, products, library, exclusions, calls,
-                         lead_intel, _sequencer(sequencer), writer)  # fmt: skip
+                         lead_intel, _sequencer(sequencer), writer, links)  # fmt: skip
 
 
 @router.get("/settings", response_model=SendingSettingsOut)
@@ -192,3 +193,19 @@ async def reply_thread(thread_id: str, deps: outreach.Deps = Depends(_deps)) -> 
     messages = sorted((outreach.message_summary(m) for m in body.get("messages") or []),
                       key=lambda m: m["sent_at"] or datetime.min.replace(tzinfo=UTC))  # fmt: skip
     return ReplyThreadDetailOut(**summary, messages=[ReplyMessageOut(**m) for m in messages])
+
+
+@router.post("/campaigns/sync", response_model=list[CampaignSyncOut])
+async def sync_campaigns(deps: outreach.Deps = Depends(_deps), _: CurrentUser = Depends(require_manager)) -> list[CampaignSyncOut]:
+    """Give every ICP that's on in Lead Intel its "Coldbrew: <ICP>" campaign: link, rename or create
+    (as a draft copy). Runs on its own when an ICP is created or renamed; this catches up the rest."""
+    out = []
+    for icp in await deps.lead_intel.list_icps():
+        if not icp.get("enabled", True):
+            continue
+        try:
+            result = await outreach.ensure_campaign(deps.sequencer, deps.links, icp["id"], icp["name"])
+            out.append(CampaignSyncOut(icp=icp["name"], status=result.status, note=result.note))
+        except SendingError as exc:
+            out.append(CampaignSyncOut(icp=icp["name"], status="skipped", note=f"Campaign not set up: {exc.message}"))
+    return out

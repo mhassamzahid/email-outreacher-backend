@@ -133,6 +133,7 @@ class Sequencer:
         self.rows = enrollments or []
         self.fail = fail
         self.list_threads, self.detail = {}, {}
+        self.copied, self.renamed = [], []
 
     async def campaigns(self):
         return self.list_campaigns
@@ -157,6 +158,16 @@ class Sequencer:
 
     async def set_steps(self, campaign_id, steps, etag, key):
         self.patched.append((campaign_id, steps, etag))
+
+    async def duplicate(self, campaign_id, key):
+        copy = {"id": f"copy-of-{campaign_id}", "name": "Copy", "status": "draft", "steps": []}
+        self.list_campaigns.append(copy)
+        self.copied.append((campaign_id, key))
+        return copy
+
+    async def rename(self, campaign_id, name, etag, key):
+        next(c for c in self.list_campaigns if c["id"] == campaign_id)["name"] = name
+        self.renamed.append((campaign_id, name))
 
     async def inboxes(self):
         return [{"id": "in1", "email": "emily@meetaheadtech360.com"}]
@@ -445,3 +456,71 @@ def test_a_thread_outside_coldbrew_campaigns_is_not_shown(api) -> None:
     seq.detail = {"thread": THREAD | {"sequence": {"id": "c9"}}, "messages": []}
     app.dependency_overrides[router._deps] = lambda: deps(Sending([]), seq)
     assert client.get("/api/v1/sending/replies/p:in1:abc").status_code == 404
+
+
+# ---------- Each ICP's campaign ----------
+
+
+class Links:
+    def __init__(self, rows=None):
+        self.rows = dict(rows or {})
+
+    async def all(self):
+        return dict(self.rows)
+
+    async def link(self, icp_id, campaign_id):
+        self.rows[icp_id] = campaign_id
+
+
+def test_a_new_icp_gets_a_draft_copy_of_a_coldbrew_campaign() -> None:
+    seq, links, icp = Sequencer([CAMPAIGN, {"id": "x", "name": "Someone else's", "status": "active"}]), Links(), uuid4()
+    out = run(outreach.ensure_campaign(seq, links, icp, " Embroidery "))
+    assert (out.status, out.campaign) == ("created", "Coldbrew: Embroidery")
+    assert [c for c, _ in seq.copied] == ["c1"] and seq.renamed == [("copy-of-c1", "Coldbrew: Embroidery")]
+    assert links.rows == {icp: "copy-of-c1"}
+    # Saving it again changes nothing, and never makes a second copy.
+    assert run(outreach.ensure_campaign(seq, links, icp, "Embroidery")).status == "unchanged" and len(seq.copied) == 1
+
+
+def test_an_existing_campaign_with_the_name_is_linked_not_copied() -> None:
+    seq, links, icp = Sequencer([CAMPAIGN]), Links(), uuid4()
+    assert run(outreach.ensure_campaign(seq, links, icp, "DTF")).status == "linked"
+    assert links.rows == {icp: "c1"} and seq.copied == []
+
+
+def test_renaming_an_icp_renames_its_draft_campaign() -> None:
+    icp = uuid4()
+    seq = Sequencer([dict(CAMPAIGN)])
+    out = run(outreach.ensure_campaign(seq, Links({icp: "c1"}), icp, "DTF printers"))
+    assert (out.status, seq.renamed) == ("renamed", [("c1", "Coldbrew: DTF printers")])
+
+
+def test_a_sending_campaign_keeps_its_name() -> None:
+    icp = uuid4()
+    seq = Sequencer([CAMPAIGN | {"status": "active"}])
+    out = run(outreach.ensure_campaign(seq, Links({icp: "c1"}), icp, "DTF printers"))
+    assert out.status == "skipped" and "Pause it" in out.note and seq.renamed == []
+
+
+def test_without_a_campaign_to_copy_nothing_is_made() -> None:
+    seq = Sequencer([{"id": "x", "name": "Someone else's", "status": "draft"}])
+    out = run(outreach.ensure_campaign(seq, Links(), uuid4(), "DTF"))
+    assert out.status == "skipped" and seq.copied == []
+
+
+def test_queueing_uses_the_linked_campaign_after_a_rename() -> None:
+    pair = (email(), lead())
+    renamed = CAMPAIGN | {"name": "Coldbrew: DTF printers"}  # the ICP is still called "DTF" in this fake
+    d = deps(Sending([pair]), Sequencer([renamed]))
+    d.links = Links({ICP: "c1"})
+    [out] = run(outreach.queue(d, [pair[0].id]))
+    assert (out.status, out.campaign) == ("queued", "Coldbrew: DTF printers")
+
+
+def test_duplicate_reads_the_copy_from_the_answer() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/campaigns/c1/duplicate") and request.headers["idempotency-key"] == "coldbrew-dup-key"
+        return httpx.Response(200, json={"data": {"sequence": {"id": "c2", "name": "Coldbrew: DTF (copy)", "status": "draft"}, "subsequences": []}})
+
+    client = SequencerClient("k", transport=httpx.MockTransport(handler))
+    assert run(client.duplicate("c1", "coldbrew-dup-key"))["id"] == "c2"

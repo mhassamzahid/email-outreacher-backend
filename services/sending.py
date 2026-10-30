@@ -195,6 +195,15 @@ class SequencerClient(_Client):
         queued = await self._write("POST", f"/campaigns/{campaign_id}/enrollments", key, {"list_ids": [list_id]})
         await self._wait(queued.get("action") or queued, "Adding the leads to the campaign")
 
+    async def duplicate(self, campaign_id: str, key: str) -> dict[str, Any]:
+        """A draft copy of a campaign (steps, settings and mailboxes, no leads). The same key never makes a second copy."""
+        copied = await self._write("POST", f"/campaigns/{campaign_id}/duplicate", key)
+        return copied.get("sequence") or copied.get("campaign") or copied  # answered as {"sequence": {...}, "subsequences": [...]}
+
+    async def rename(self, campaign_id: str, name: str, etag: str, key: str) -> dict[str, Any]:
+        """Rename a draft or paused campaign."""
+        return await self._write("PATCH", f"/campaigns/{campaign_id}", key, {"name": name[:200]}, etag)
+
     async def set_steps(self, campaign_id: str, steps: list[dict[str, Any]], etag: str, key: str) -> dict[str, Any]:
         """Replace a draft or paused campaign's step copy (ids echoed, so the steps are kept)."""
         return await self._write("PATCH", f"/campaigns/{campaign_id}", key, {"steps": steps}, etag)
