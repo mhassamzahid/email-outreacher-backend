@@ -297,6 +297,8 @@ class Settings(Base):
     followup_fallback_2: Mapped[str] = mapped_column(Text, server_default=FALLBACK_2)
     followup_fallback_3: Mapped[str] = mapped_column(Text, server_default=FALLBACK_3)
     followup_lead_hours: Mapped[int] = mapped_column(SmallInteger, server_default="24")
+    # The cost estimator (schemas.CostEstimate); null until someone saves one.
+    cost_estimate: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     updated_at: Mapped[datetime] = _updated()
 
 

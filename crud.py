@@ -13,6 +13,7 @@ from models import (
     Exclusion, User, Workspace, WorkspaceCompany, WorkspaceMember, FALLBACK_2, FALLBACK_3,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
+from services.cost_estimate import DEFAULT_ESTIMATE
 from services.apollo import ApolloOrganization, FoundPerson, RevealedPerson
 from services.google_places import Place
 from services.identity import identity_keys
@@ -1473,6 +1474,15 @@ class SettingsRepo:
     async def save_sending(self, workspace_id: UUID, values: dict[str, Any]) -> dict[str, Any]:
         await self._save(workspace_id, values)
         return await self.sending(workspace_id)
+
+    async def cost_estimate(self, workspace_id: UUID) -> dict[str, Any]:
+        """The saved cost estimate, or the starting one while none is saved."""
+        saved = (await self._get(workspace_id, {"cost_estimate": None}))["cost_estimate"]
+        return saved or DEFAULT_ESTIMATE
+
+    async def save_cost_estimate(self, workspace_id: UUID, estimate: dict[str, Any]) -> dict[str, Any]:
+        await self._save(workspace_id, {"cost_estimate": estimate})
+        return await self.cost_estimate(workspace_id)
 
     async def research(self, workspace_id: UUID) -> dict[str, int]:
         """How much of a company's website research may read."""

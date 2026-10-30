@@ -474,6 +474,31 @@ class CampaignSyncOut(ApiModel):
     note: str
 
 
+# ---------- Cost estimator ----------
+
+CostUnit = Literal["month", "lead", "email"]
+
+
+class CostItem(ApiModel):
+    id: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=80)
+    category: str = Field(default="Other", max_length=40)
+    # month: a fixed monthly amount; lead: per lead contacted; email: per email sent.
+    unit: CostUnit
+    amount_usd: float = Field(ge=0, le=1_000_000)
+    note: str = Field(default="", max_length=300)
+    enabled: bool = True
+
+
+class CostEstimate(ApiModel):
+    leads_per_month: int = Field(ge=0, le=1_000_000)
+    # Emails actually sent per lead, on average: 3 when nobody replies, fewer as replies stop sequences.
+    emails_per_lead: float = Field(ge=0, le=10)
+    # Replies per 100 leads, for the cost per reply. 0 until you set it.
+    reply_rate_pct: float = Field(ge=0, le=100)
+    items: list[CostItem] = Field(max_length=60)
+
+
 class FollowUpRunOut(ApiModel):
     checked: int
     written: int

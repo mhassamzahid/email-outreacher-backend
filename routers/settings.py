@@ -1,12 +1,14 @@
-"""Workspace settings: how many rated emails Claude learns from, and how much of a website research reads."""
+"""Workspace settings: how many rated emails Claude learns from, how much of a website research reads,
+and the cost estimator."""
 
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from crud import SettingsRepo
-from dependencies import get_settings_repo, require_workspace_id
-from schemas import FeedbackSettings, ResearchSettings
+from dependencies import get_settings_repo, require_manager, require_workspace_id
+from schemas import CostEstimate, FeedbackSettings, ResearchSettings
+from services.auth import CurrentUser
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -50,3 +52,25 @@ async def save_research_settings(
 ) -> ResearchSettings:
     await _workspace(settings, workspace_id)
     return ResearchSettings(**await settings.save_research(workspace_id, body.model_dump()))
+
+
+@router.get("/cost-estimate", response_model=CostEstimate)
+async def get_cost_estimate(
+    workspace_id: UUID = Depends(require_workspace_id), settings: SettingsRepo = Depends(get_settings_repo)
+) -> CostEstimate:
+    """The cost estimator's inputs and cost items: the workspace's saved ones, or the starting ones."""
+    await _workspace(settings, workspace_id)
+    return CostEstimate(**await settings.cost_estimate(workspace_id))
+
+
+@router.put("/cost-estimate", response_model=CostEstimate)
+async def save_cost_estimate(
+    body: CostEstimate,
+    workspace_id: UUID = Depends(require_workspace_id),
+    settings: SettingsRepo = Depends(get_settings_repo),
+    _: CurrentUser = Depends(require_manager),
+) -> CostEstimate:
+    await _workspace(settings, workspace_id)
+    if len({item.id for item in body.items}) != len(body.items):
+        raise HTTPException(status_code=422, detail="Each cost item needs its own id")
+    return CostEstimate(**await settings.save_cost_estimate(workspace_id, body.model_dump()))
