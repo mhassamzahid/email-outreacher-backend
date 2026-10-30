@@ -47,10 +47,22 @@ class ResponseCache:
         if scope["type"] != "http" or not path.startswith(PREFIX):
             return await self.app(scope, receive, send)
         if scope["method"] != "GET":
+            started = False
+
+            async def clear_on_answer(message: Message) -> None:
+                # The change is saved by the time the answer starts, and the browser's next read can only
+                # come after it arrives: clearing here, not later, means that read never gets an old answer.
+                nonlocal started
+                if message["type"] == "http.response.start":
+                    started = True
+                    clear()
+                await send(message)
+
             try:
-                return await self.app(scope, receive, send)
+                return await self.app(scope, receive, clear_on_answer)
             finally:
-                clear()  # after the change is made, so a read that raced it is never kept
+                if not started:
+                    clear()
 
         seconds = get_settings().response_cache_seconds
         headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
@@ -80,13 +92,17 @@ class ResponseCache:
                 start.update(message)
             elif message["type"] == "http.response.body":
                 chunks.append(message.get("body", b""))
+                if not message.get("more_body"):
+                    keep()  # before the last bytes go out, so the browser's next read finds it
             await send(message)
 
+        def keep() -> None:
+            content_type = dict(start.get("headers", [])).get(b"content-type", b"")
+            body = b"".join(chunks)
+            # Only a clean JSON answer, and only if nothing changed while it was being made.
+            if start.get("status") == 200 and content_type.startswith(b"application/json") and len(body) <= MAX_BODY and version == _version:
+                _entries[key] = (time.monotonic(), content_type, body)
+                if len(_entries) > MAX_ENTRIES:
+                    _entries.popitem(last=False)
+
         await self.app(scope, receive, capture)
-        content_type = dict(start.get("headers", [])).get(b"content-type", b"")
-        body = b"".join(chunks)
-        # Only a clean JSON answer, and only if nothing changed while it was being made.
-        if start.get("status") == 200 and content_type.startswith(b"application/json") and len(body) <= MAX_BODY and version == _version:
-            _entries[key] = (time.monotonic(), content_type, body)
-            if len(_entries) > MAX_ENTRIES:
-                _entries.popitem(last=False)

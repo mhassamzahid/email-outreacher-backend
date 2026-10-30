@@ -104,3 +104,22 @@ def test_off_when_set_to_zero(cached, monkeypatch) -> None:
     client.get("/api/v1/things", headers=h())
     client.get("/api/v1/things", headers=h())
     assert calls["reads"] == 2
+
+
+def test_a_change_clears_it_before_its_answer_arrives(cached) -> None:
+    """The browser's next read can follow the answer at once: by then the old answers must be gone."""
+    client, calls = cached
+    client.get("/api/v1/things", headers=h())
+    seen = []
+    real_clear = response_cache.clear
+
+    def watched() -> None:
+        seen.append(len(response_cache._entries))
+        real_clear()
+
+    import unittest.mock
+
+    with unittest.mock.patch.object(response_cache, "clear", watched):
+        r = client.post("/api/v1/things", headers=h())
+    assert r.status_code == 200 and seen == [1]  # cleared exactly once, while answering
+    assert client.get("/api/v1/things", headers=h()).json() == {"reads": 2}
