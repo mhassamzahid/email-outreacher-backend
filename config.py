@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     # The page named in the website reader's User-Agent, for site owners who want to know who's reading.
     bot_info_url: str = "https://aheadtech360.com"
 
+    # Prices the cost estimator uses where Coldbrew has no source of its own, as JSON by line id, e.g.
+    # {"apollo-reveal": 0.02, "linkedin-posts": 0.002, "railway": 20}. The estimator shows prices read-only.
+    cost_prices: str = ""
+
     # Background work: Celery workers and Celery beat, with Redis as the broker.
     redis_url: str = "redis://localhost:6379/0"
     # The broker Celery uses; empty means REDIS_URL.
@@ -86,6 +90,19 @@ class Settings(BaseSettings):
     @property
     def jwks_url(self) -> str:
         return self.supabase_jwks_url or f"{self.auth_issuer}/.well-known/jwks.json"
+
+    @property
+    def cost_price_overrides(self) -> dict[str, float]:
+        """COST_PRICES as {line id: price}; anything that isn't a non-negative number is ignored."""
+        import json
+
+        try:
+            raw = json.loads(self.cost_prices or "{}")
+        except ValueError:
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): float(v) for k, v in raw.items() if isinstance(v, int | float) and not isinstance(v, bool) and v >= 0}
 
     @property
     def broker_url(self) -> str:

@@ -508,6 +508,8 @@ class CostEstimate(ApiModel):
     emails_per_lead: float = Field(ge=0, le=10)
     # Replies per 100 leads, for the cost per reply. 0 until you set it.
     reply_rate_pct: float = Field(ge=0, le=100)
+    # Website pages company verification reads per company (Settings allow up to 6).
+    pages_per_company: float = Field(default=1, ge=0, le=100)
     items: list[CostItem] = Field(max_length=80)
 
 
@@ -529,6 +531,8 @@ class MeasuredUse(ApiModel):
 
 class CostReference(ApiModel):
     claude_prices: list[ClaudePrice]
+    # The model company verification uses (CLAUDE_SCORING_MODEL on the server).
+    scoring_model: str
     measured: list[MeasuredUse]
     since: datetime
 

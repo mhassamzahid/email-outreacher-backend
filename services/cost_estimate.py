@@ -37,6 +37,7 @@ DEFAULT_ESTIMATE: dict[str, Any] = {
     "leads_per_month": 2000,
     "emails_per_lead": 3,
     "reply_rate_pct": 0,
+    "pages_per_company": 1,
     "items": [
         # Writing (Claude)
         _claude("email-generation", "Email generation (hooks, email, score)", "per lead written", "Write emails", 10182, 2562, 1, "lead",
@@ -95,3 +96,28 @@ def upgrade(saved: dict[str, Any]) -> dict[str, Any]:
                     "model": None, "tokens_in": None, "tokens_out": None, "action": None}  # fmt: skip
         items.append(item)
     return {**saved, "items": items}
+
+
+VERIFICATION = "verification"
+
+
+def refresh(estimate: dict[str, Any], scoring_model: str, overrides: dict[str, float]) -> dict[str, Any]:
+    """Prices are read-only: every line Coldbrew knows gets today's price (COST_PRICES first, then the
+    starting price), Claude lines are priced from their tokens and model, and company verification uses the
+    server's scoring model. Whatever price a saved estimate or the browser carried is ignored."""
+    known = {item["id"]: item for item in DEFAULT_ESTIMATE["items"]}
+    items = []
+    for item in estimate.get("items", []):
+        item = dict(item)
+        start = known.get(item["id"])
+        if item["id"] == VERIFICATION:
+            item["model"] = scoring_model
+        if item.get("model") and item.get("tokens_in") is not None and item.get("tokens_out") is not None:
+            item["price_usd"] = claude_price(item["model"], item["tokens_in"], item["tokens_out"])
+        elif start is not None:
+            item["price_usd"] = overrides.get(item["id"], start["price_usd"])
+            item["unit_label"] = start["unit_label"]
+        elif item["id"] in overrides:
+            item["price_usd"] = overrides[item["id"]]
+        items.append(item)
+    return {**estimate, "pages_per_company": estimate.get("pages_per_company", 1), "items": items}

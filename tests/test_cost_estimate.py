@@ -110,3 +110,30 @@ def test_reference_gives_model_prices_and_measured_use(client) -> None:
     d = client.get("/api/v1/settings/cost-estimate/reference", headers=WS).json()
     assert {p["model"] for p in d["claudePrices"]} == set(PRICES)
     assert d["measured"] == [{"action": "Write emails", "uses": 2, "tokensIn": 10182, "tokensOut": 2562, "costUsd": 0.0023}]
+
+
+def test_prices_are_read_only_and_come_from_the_server(client, store, monkeypatch) -> None:
+    from config import get_settings
+
+    monkeypatch.setattr(get_settings(), "cost_prices", '{"apollo-reveal": 0.02, "railway": 20, "bad": -1, "worse": "x"}')
+    monkeypatch.setattr(get_settings(), "claude_scoring_model", "claude-sonnet-5-5")
+    body = client.get("/api/v1/settings/cost-estimate", headers=WS).json()
+    for item in body["items"]:
+        if item["id"] in ("cheapsequencer", "apollo-reveal"):
+            item["priceUsd"] = 999  # the browser trying to change a price
+    body["pagesPerCompany"] = 4
+    saved = client.put("/api/v1/settings/cost-estimate", headers=WS, json=body).json()
+    price = {i["id"]: i["priceUsd"] for i in saved["items"]}
+    assert (price["cheapsequencer"], price["apollo-reveal"], price["railway"]) == (29, 0.02, 20)
+    assert saved["pagesPerCompany"] == 4 and store.saved["pages_per_company"] == 4
+    verification = next(i for i in saved["items"] if i["id"] == "verification")
+    assert verification["model"] == "claude-sonnet-5-5"
+    assert verification["priceUsd"] == claude_price("claude-sonnet-5-5", verification["tokensIn"], verification["tokensOut"])
+
+
+def test_cost_prices_ignores_what_isnt_a_price(monkeypatch) -> None:
+    from config import get_settings
+
+    for raw, expected in (("", {}), ("not json", {}), ("[1]", {}), ('{"a": 1, "b": -2, "c": true, "d": "3"}', {"a": 1.0})):
+        monkeypatch.setattr(get_settings(), "cost_prices", raw)
+        assert get_settings().cost_price_overrides == expected
