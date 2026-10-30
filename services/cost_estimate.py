@@ -32,13 +32,13 @@ def _claude(id_: str, name: str, unit: str, action: str | None, tokens_in: int, 
             note: str, category: str = "AI (Claude)") -> dict[str, Any]:  # fmt: skip
     return {"id": id_, "name": name, "category": category, "unit_label": unit, "model": CLAUDE_MODEL,
             "tokens_in": tokens_in, "tokens_out": tokens_out, "price_usd": claude_price(CLAUDE_MODEL, tokens_in, tokens_out),
-            "quantity": quantity, "basis": basis, "action": action, "note": note, "enabled": True, "planned": False}  # fmt: skip
+            "quantity": quantity, "basis": basis, "action": action, "note": note, "enabled": True, "planned": False, "free": False}  # fmt: skip
 
 
 def _item(id_: str, name: str, category: str, unit: str, price: float, quantity: float, basis: str, note: str) -> dict[str, Any]:
     return {"id": id_, "name": name, "category": category, "unit_label": unit, "price_usd": price, "quantity": quantity,
             "basis": basis, "model": None, "tokens_in": None, "tokens_out": None, "action": None, "note": note, "enabled": True,
-            "planned": False}  # fmt: skip
+            "planned": False, "free": False}  # fmt: skip
 
 
 # Estimate lines that are sources (services/sources.py): their price comes from Apify, and planned ones are marked.
@@ -58,6 +58,8 @@ LINE_SOURCE = {
     "youtube-videos": "analysis:youtube",
 }
 PLANNED = {f"{s.kind}:{s.id}" for s in SOURCES if s.status == "planned"}
+# Lines that cost nothing as Coldbrew runs them, until COST_PRICES gives them a price (a Jina key, say).
+FREE = {"website-pages"}
 VERIFY = "Verification"
 ANALYSIS = "Lead analysis"
 APIFY = "Apify's price for your plan, read from Apify."
@@ -120,6 +122,8 @@ DEFAULT_ESTIMATE: dict[str, Any] = {
         _item("supabase", "Supabase (database and sign-in)", "Hosting", "per month", 0, 1, "month", "Enter your Supabase plan in COST_PRICES."),
     ],
 }  # fmt: skip
+for _line in DEFAULT_ESTIMATE["items"]:
+    _line["free"] = _line["id"] in FREE
 
 _LEGACY_UNIT_LABEL = {"month": "per month", "lead": "per lead", "email": "per email sent"}
 VERIFICATION = "verification"
@@ -150,7 +154,7 @@ def upgrade(saved: dict[str, Any]) -> dict[str, Any]:
 def _priced_line(item: dict[str, Any], scoring_model: str, overrides: dict[str, float],
                  apify: dict[str, tuple[float | None, float | None]] | None) -> dict[str, Any]:  # fmt: skip
     """One line with today's price, name and place."""
-    item = {"planned": False, **item}
+    item = {"planned": False, "free": False, **item}
     start = _KNOWN.get(item["id"])
     source = LINE_SOURCE.get(item["id"])
     if item["id"] == VERIFICATION:
@@ -167,6 +171,7 @@ def _priced_line(item: dict[str, Any], scoring_model: str, overrides: dict[str, 
         # Lines Coldbrew knows keep their place: verification sources, lead analysis, and so on.
         item.update(category=start["category"], name=start["name"], unit_label=start["unit_label"], basis=start["basis"])
     item["planned"] = source in PLANNED
+    item["free"] = item["id"] in FREE and not item["price_usd"]
     return item
 
 

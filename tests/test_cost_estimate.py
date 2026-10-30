@@ -8,7 +8,7 @@ from dependencies import get_current_user, get_settings_repo
 from main import app
 from schemas import CostEstimate
 from services.auth import CurrentUser
-from services.cost_estimate import DEFAULT_ESTIMATE, claude_price, upgrade
+from services.cost_estimate import CLAUDE_MODEL, DEFAULT_ESTIMATE, claude_price, refresh, upgrade
 from tests.conftest import WORKSPACE_ID
 
 WS = {"X-Workspace-Id": str(WORKSPACE_ID)}
@@ -38,10 +38,10 @@ def store(client):
 
 def test_the_starting_estimate_only_prices_what_has_a_source() -> None:
     estimate = CostEstimate(**DEFAULT_ESTIMATE)
-    unpriced = {i.id for i in estimate.items if not i.price_usd}
-    # Apollo, Apify people search, Jina, hosting: no source Coldbrew can read, so COST_PRICES fills them in.
+    unpriced = {i.id for i in estimate.items if not i.price_usd and not i.free}
+    # Apollo, Apify people search, hosting: no source Coldbrew can read, so COST_PRICES fills them in.
     assert unpriced == {"prompt-improvement", "apollo-companies", "apollo-people", "apify-linkedin-people", "apollo-reveal",
-                        "website-pages", "railway", "vercel", "supabase"}  # fmt: skip
+                        "railway", "vercel", "supabase"}  # fmt: skip
     assert all(i.note for i in estimate.items)  # every line says where its number comes from
     # Claude lines are priced from tokens and the model's price table.
     email = next(i for i in estimate.items if i.id == "email-generation")
@@ -176,3 +176,11 @@ def test_cost_prices_ignores_what_isnt_a_price(monkeypatch) -> None:
     for raw, expected in (("", {}), ("not json", {}), ("[1]", {}), ('{"a": 1, "b": -2, "c": true, "d": "3"}', {"a": 1.0})):
         monkeypatch.setattr(get_settings(), "cost_prices", raw)
         assert get_settings().cost_price_overrides == expected
+
+
+def test_website_pages_are_free_until_cost_prices_gives_them_a_price() -> None:
+    pages = lambda e: next(i for i in e["items"] if i["id"] == "website-pages")  # noqa: E731
+    free = refresh({"items": []}, CLAUDE_MODEL, {})
+    assert pages(free)["free"] and pages(free)["price_usd"] == 0
+    keyed = refresh({"items": []}, CLAUDE_MODEL, {"website-pages": 0.001})
+    assert not pages(keyed)["free"] and pages(keyed)["price_usd"] == 0.001

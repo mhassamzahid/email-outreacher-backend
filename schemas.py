@@ -526,6 +526,8 @@ class CostItem(ApiModel):
     enabled: bool = True
     # A source Coldbrew can't run yet (services/sources.py): shown for planning, never run.
     planned: bool = False
+    # Costs nothing as Coldbrew runs it (set on the server), unlike a price of 0 that nobody has set yet.
+    free: bool = False
 
 
 class CostEstimate(ApiModel):
