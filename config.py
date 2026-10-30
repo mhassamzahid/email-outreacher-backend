@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     followup_check_seconds: int = Field(default=1800, ge=60)
     # The longest a background job (research, writing emails, fetching posts...) may run before it's stopped.
     job_time_limit_seconds: int = Field(default=3600, ge=60)
+    # How long a read is answered from memory (response_cache.py). Any change made through Coldbrew clears it
+    # at once; this bounds how stale changes made elsewhere (Lead Intel, the follow-up check) can look. 0: off.
+    response_cache_seconds: int = Field(default=60, ge=0, le=3600)
 
     @property
     def auth_issuer(self) -> str:

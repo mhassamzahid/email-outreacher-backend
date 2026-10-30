@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
+import response_cache
 from background import LONG_RUNNING
 from config import get_settings
 from crud import JobRepo
@@ -73,4 +74,8 @@ async def get_job(
     job = await jobs.get(job_id)
     if job is None or job.workspace_id != workspace_id or (job.created_by != user.id and not user.is_admin):
         raise HTTPException(status_code=404, detail="Job not found")
-    return _out(job)
+    out = _out(job)
+    if out.status not in ("queued", "running"):
+        # The worker changed things in another process: reads cached before it finished are out of date.
+        response_cache.clear()
+    return out

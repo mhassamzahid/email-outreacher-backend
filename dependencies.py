@@ -1,6 +1,6 @@
 import hmac
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 
 import anthropic
 from uuid import UUID
@@ -64,22 +64,31 @@ def get_user_repo(session: AsyncSession = Depends(get_session)) -> UserRepo:
 SECRET_HEADER = "x-coldbrew-secret"
 
 
-async def require_api_secret(request: Request) -> None:
-    """Only Coldbrew's own frontend server may call the API: it sends API_SECRET in X-Coldbrew-Secret,
-    and a request that carries an Origin or Referer must come from one of AUTHORIZED_URLS. Runs before
-    sign-in, so a stranger's request is refused without touching Supabase or the database."""
-    if current_job.get() is not None:
-        return  # a background job, run in-process by the worker (background.py): no browser involved
+def secret_refusal(headers: Mapping[str, str]) -> HTTPException | None:
+    """Why a request didn't come from Coldbrew's own frontend server, or None when it did: it must send
+    API_SECRET in X-Coldbrew-Secret, and an Origin or Referer, when there is one, must be in AUTHORIZED_URLS.
+    Shared with the response cache (response_cache.py), which answers before any dependency runs."""
     settings = get_settings()
     if not settings.api_secret:
-        raise HTTPException(status_code=503, detail="The API isn't configured: API_SECRET is not set.")
-    sent = request.headers.get(SECRET_HEADER, "")
+        return HTTPException(status_code=503, detail="The API isn't configured: API_SECRET is not set.")
+    sent = headers.get(SECRET_HEADER, "")
     if not hmac.compare_digest(sent.encode(), settings.api_secret.encode()):
-        raise HTTPException(status_code=401, detail="Not authorized.")
+        return HTTPException(status_code=401, detail="Not authorized.")
     for header in ("origin", "referer"):
-        value = request.headers.get(header)
+        value = headers.get(header)
         if value and origin_of(value) not in settings.authorized_url_list:
-            raise HTTPException(status_code=403, detail="Not authorized.")
+            return HTTPException(status_code=403, detail="Not authorized.")
+    return None
+
+
+async def require_api_secret(request: Request) -> None:
+    """Only Coldbrew's own frontend server may call the API (see secret_refusal). Runs before sign-in, so a
+    stranger's request is refused without touching Supabase or the database."""
+    if current_job.get() is not None:
+        return  # a background job, run in-process by the worker (background.py): no browser involved
+    refusal = secret_refusal(request.headers)
+    if refusal is not None:
+        raise refusal
 
 
 # Who a signed-in account is (role, workspaces), kept briefly: looking it up costs two or three database

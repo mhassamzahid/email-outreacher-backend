@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
+from response_cache import ResponseCache
 from dependencies import get_current_user, refuse_inline, require_api_secret
 from routers import (
     companies, emails, examples, exclusions, health, icps, improve, jobs, leads, mailboxes, pipeline, posts, products, prompts,
@@ -53,6 +54,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Repeat reads come from memory until anything changes (response_cache.py). Inside CORS, so cached
+    # answers get the same CORS headers.
+    app.add_middleware(ResponseCache)
 
     app.include_router(api_router)
 
