@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from crud import PRODUCT_FIELDS, exclusion_note, person_keys
 from models import Email, Lead
@@ -294,8 +294,11 @@ async def queue(deps: Deps, email_ids: list[UUID]) -> list[QueueOutcome]:
         rows = [lead_row(lead, e.subject, e.edited_body or e.body, settings["followup_fallback_2"], settings["followup_fallback_3"])
                 for e, lead in members]  # fmt: skip
         try:
-            list_id = await deps.sequencer.create_list(f"{campaign_name} {datetime.now(UTC):%Y-%m-%d %H:%M}", key_for("list", *ids))
-            await deps.sequencer.import_rows(list_id, rows, key_for("import", *ids))
+            # The list's key and name depend only on which emails these are, so a retry reuses the same list.
+            # Each import gets a fresh key: re-importing only updates the same leads by email.
+            list_key = key_for("queue-list", *ids)  # not "list": keys from before this fix had timestamped names
+            list_id = await deps.sequencer.create_list(f"{campaign_name} batch {list_key[-8:]}", list_key)
+            await deps.sequencer.import_rows(list_id, rows, key_for("import", *ids, uuid4().hex))
             await deps.sequencer.enroll(campaign_id, list_id, key_for("enroll", campaign_id, *ids))
         except SendingError as exc:
             outcomes += [QueueOutcome(e.id, "skipped", exc.message) for e, _ in members]
@@ -462,7 +465,8 @@ async def run_follow_ups(deps: Deps, now: datetime | None = None) -> FollowUpRun
     for list_id, items in to_write.items():
         rows = [{"email": (lead.email or "").lower(), f"email_{step}_body": body} for _, lead, step, body, _ in items]
         try:
-            await deps.sequencer.import_rows(list_id, rows, key_for("followup", list_id, *[f"{l.id}:{s}" for _, l, s, _, _ in items]))
+            # A fresh key each time: a rewrite has different text, and re-importing only updates the same leads.
+            await deps.sequencer.import_rows(list_id, rows, key_for("followup", list_id, uuid4().hex))
         except SendingError as exc:
             run.notes.append(f"Follow-ups couldn't be written to CheapSequencer: {exc.message}")
             continue

@@ -146,9 +146,11 @@ class Sequencer:
         return self.rows
 
     async def create_list(self, name, key):
+        self.lists = [*getattr(self, "lists", []), (name, key)]
         return "list-1"
 
     async def import_rows(self, list_id, rows, key):
+        self.import_keys = [*getattr(self, "import_keys", []), key]
         if self.fail:
             raise SendingError(self.fail)
         self.imports.append((list_id, rows))
@@ -525,3 +527,14 @@ def test_duplicate_reads_the_copy_from_the_answer() -> None:
 
     client = SequencerClient("k", transport=httpx.MockTransport(handler))
     assert run(client.duplicate("c1", "coldbrew-dup-key"))["id"] == "c2"
+
+
+def test_a_failed_queue_can_be_retried() -> None:
+    pair = (email(), lead())
+    seq = Sequencer([CAMPAIGN], fail="The import didn't finish")
+    run(outreach.queue(deps(Sending([pair]), seq), [pair[0].id]))
+    seq.fail = None
+    [out] = run(outreach.queue(deps(Sending([pair]), seq), [pair[0].id]))
+    assert out.status == "queued"
+    # Same list (same key and name, so CheapSequencer answers with the first one); a new key per import.
+    assert seq.lists[0] == seq.lists[1] and seq.import_keys[0] != seq.import_keys[1]
