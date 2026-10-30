@@ -125,3 +125,46 @@ def test_the_worker_runs_the_endpoint_as_its_starter_and_past_the_guards(client)
     assert status == 422  # the endpoint's own validation: not 401 (signed in) or 409 (allowed to run)
     assert background._detail(body, status).startswith("stakeholderIds")
     assert background.current_job.get() is None  # nothing leaks out of the call
+
+
+def test_a_job_that_runs_out_of_time_is_stopped_and_recorded(monkeypatch) -> None:
+    """Enforced by the runner itself: Celery's own time limits do nothing on Windows (--pool=solo)."""
+    from contextlib import asynccontextmanager
+
+    from config import get_settings
+
+    finished = {}
+    job = SimpleNamespace(created_by=ADMIN.id, workspace_id=WORKSPACE_ID, params={"path": "/posts/fetch", "body": {}})
+
+    class Jobs:
+        def __init__(self, _session):
+            pass
+
+        async def start(self, _id):
+            return job
+
+        async def finish(self, _id, status, result, detail):
+            finished.update(status=status, result=result, detail=detail)
+
+    @asynccontextmanager
+    async def session():
+        yield None
+
+    async def user(_users, _id):
+        return ADMIN
+
+    async def slow(*_args):
+        await asyncio.sleep(5)
+
+    async def no_dispose():
+        return None
+
+    monkeypatch.setattr(background, "JobRepo", Jobs)
+    monkeypatch.setattr(background, "get_sessionmaker", lambda: session)
+    monkeypatch.setattr(background, "_user", user)
+    monkeypatch.setattr(background, "_call", slow)
+    monkeypatch.setattr(background, "get_engine", lambda: SimpleNamespace(dispose=no_dispose))
+    monkeypatch.setattr(get_settings(), "job_time_limit_seconds", 0.2)
+    asyncio.run(background.run_job(uuid4()))
+    assert finished["status"] == "failed" and "ran out of time" in finished["detail"]
+    assert finished["result"]["statusCode"] == 504

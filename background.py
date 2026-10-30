@@ -13,6 +13,7 @@ A job is never retried on its own (a retry could pay for the same work twice): o
 worker shows as failed and is started again by hand.
 """
 
+import asyncio
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from uuid import UUID
 
 import httpx
 
+from config import get_settings
 from crud import JobRepo, UserRepo
 from database import get_engine, get_sessionmaker
 from services.auth import CurrentUser
@@ -55,6 +57,7 @@ current_job: ContextVar[JobContext | None] = ContextVar("coldbrew_current_job", 
 
 GONE = "Its starter is no longer a user here, so it wasn't run."
 CRASHED = "Something went wrong running it. The worker's log has the details."
+TIMED_OUT = "It ran out of time (JOB_TIME_LIMIT_SECONDS) and was stopped. Try fewer at a time."
 
 
 async def _user(users: UserRepo, user_id: UUID | None) -> CurrentUser | None:
@@ -78,7 +81,12 @@ async def run_job(job_id: UUID) -> None:
                 return
             path, body, workspace_id = job.params["path"], job.params.get("body"), job.workspace_id
         try:
-            status_code, payload = await _call(JobContext(job_id, user), path, body, workspace_id)
+            # Enforced here as well as by Celery: Celery's time limits do nothing with --pool=solo (Windows).
+            async with asyncio.timeout(get_settings().job_time_limit_seconds):
+                status_code, payload = await _call(JobContext(job_id, user), path, body, workspace_id)
+        except TimeoutError:
+            log.warning("job %s (%s) ran out of time", job_id, path)
+            status_code, payload = 504, {"detail": TIMED_OUT}
         except Exception:  # noqa: BLE001 - recorded on the job, so the page stops waiting
             log.exception("job %s (%s) crashed", job_id, path)
             status_code, payload = 500, {"detail": CRASHED}
