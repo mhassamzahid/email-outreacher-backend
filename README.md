@@ -15,6 +15,22 @@ uvicorn main:app --reload
 - API docs: http://localhost:8000/docs
 - Health: http://localhost:8000/health and http://localhost:8000/api/v1/health
 
+### Background work: Celery and Redis
+
+The follow-up check (record sends and replies, write the follow-ups that are nearly due) runs in a Celery
+worker, started every `FOLLOWUP_CHECK_SECONDS` (30 minutes) by Celery beat. The API itself runs no
+background loop. Start a Redis (`REDIS_URL`), then, each in its own terminal:
+
+```bash
+celery -A celery_app worker --loglevel=info          # Windows: add --pool=solo
+celery -A celery_app beat --loglevel=info
+```
+
+Run exactly one beat, or every check is scheduled twice. A Redis lock stops two checks overlapping, and
+a check still queued when the next one is due is dropped. Without Redis, `CELERY_BROKER_URL=filesystem://`
+works for local development only (on Windows, `pip install pywin32` first). "Check follow-ups now" on the
+Mailboxes page runs the same check right away, through the API.
+
 ## Database
 
 This service shares Lead Intel's Supabase database. **Lead Intel's tables are read-only here, with one agreed exception:** adding a new ICP inserts a row into `public.icps` (`lead_intel_writes.py`). Nothing in Lead Intel is ever updated or deleted, and no other Lead Intel table is written; `tests/test_lead_intel_safety.py` enforces this.
@@ -65,7 +81,7 @@ Admins open every workspace and manage users and workspaces; Management and admi
 | GET | `/api/v1/sending/campaigns` | The "Coldbrew: " campaigns in CheapSequencer with how many leads were queued into each |
 | POST | `/api/v1/sending/campaigns/sync` | Give every ICP that's on its "Coldbrew: <ICP>" campaign: link one with that name, rename the linked one after an ICP rename (draft or paused only), or create a draft copy of an existing Coldbrew campaign (steps, mailboxes, schedule, signature; no leads). Also runs on its own when an ICP is created or renamed. Managers |
 | POST | `/api/v1/sending/queue` | Put approved first emails into their ICP's campaign (`{emailIds}`): a new list, a CSV import with `email_1_subject`/`email_1_body` and the generic follow-ups, then enrollment. Never activates a campaign or sends. 409 until the sender address is set |
-| POST | `/api/v1/sending/follow-ups/run` | Read each campaign's enrollments, record sends, replies and stops, and have Claude write the follow-ups due within the lead time for leads who haven't replied. Also runs on its own every 30 minutes |
+| POST | `/api/v1/sending/follow-ups/run` | Read each campaign's enrollments, record sends, replies and stops, and have Claude write the follow-ups due within the lead time for leads who haven't replied. Celery beat also runs it every `FOLLOWUP_CHECK_SECONDS` (30 minutes) |
 | GET | `/api/v1/sending/outbox` | Every queued lead with the mailbox all three emails go out from, each email's text and whether it was sent, and where the sequence stands (queued, sending, replied, bounced, finished...). From Coldbrew's records as of the last follow-up check |
 | GET | `/api/v1/sending/replies` | Conversations in Coldbrew's campaigns where the lead wrote back, from CheapSequencer's unified inbox. Read-only |
 | GET | `/api/v1/sending/replies/{threadId}` | One conversation with every message, oldest first |
@@ -168,3 +184,14 @@ tests/
 `railway.json` sets the start command and the `/health` healthcheck. Set the variables from
 `.env.example` on the Railway service, including `AUTHORIZED_URLS` with the Vercel URL and `API_SECRET`
 (the same value as the frontend's).
+
+Background work needs three more pieces in the same Railway project, all from this repo and sharing the
+API's variables:
+
+| Service | Start command | Instances |
+| --- | --- | --- |
+| Redis | Railway's Redis database; reference its `REDIS_URL` in the services below | 1 |
+| Worker | `celery -A celery_app worker --loglevel=info --concurrency=2` | 1 or more |
+| Beat | `celery -A celery_app beat --loglevel=info` | exactly 1 |
+
+Neither the worker nor beat serves HTTP, so turn the healthcheck off for them.

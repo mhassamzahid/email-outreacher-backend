@@ -1,13 +1,8 @@
 """Entry point. Run with: uvicorn main:app --reload"""
 
-import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import jobs
 from config import get_settings
 from dependencies import get_current_user, require_api_secret
 from routers import (
@@ -43,22 +38,10 @@ protected.include_router(sending.router)
 api_router.include_router(protected)
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Background jobs (the follow-up check) run alongside the API and stop with it."""
-    tasks: list[asyncio.Task] = []
-    jobs.start(tasks)
-    try:
-        yield
-    finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title=settings.app_name, lifespan=lifespan)
+    # Background work (the follow-up check) runs in Celery workers, not here: see celery_app.py.
+    app = FastAPI(title=settings.app_name)
 
     app.add_middleware(
         CORSMiddleware,

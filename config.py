@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     # The page named in the website reader's User-Agent, for site owners who want to know who's reading.
     bot_info_url: str = "https://aheadtech360.com"
 
+    # Background work: Celery workers and Celery beat, with Redis as the broker.
+    redis_url: str = "redis://localhost:6379/0"
+    # The broker Celery uses; empty means REDIS_URL.
+    celery_broker_url: str | None = None
+    # How often beat starts the follow-up check, in seconds.
+    followup_check_seconds: int = Field(default=1800, ge=60)
+
     @property
     def auth_issuer(self) -> str:
         return f"{(self.supabase_url or '').rstrip('/')}/auth/v1"
@@ -79,6 +86,10 @@ class Settings(BaseSettings):
     @property
     def jwks_url(self) -> str:
         return self.supabase_jwks_url or f"{self.auth_issuer}/.well-known/jwks.json"
+
+    @property
+    def broker_url(self) -> str:
+        return self.celery_broker_url or self.redis_url
 
     @property
     def authorized_url_list(self) -> list[str]:

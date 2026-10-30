@@ -1,12 +1,14 @@
-"""Background work that runs inside the API process: the follow-up check every 30 minutes.
+"""The follow-up check, as plain async code that a Celery task runs (see tasks.py and celery_app.py).
 
-It starts two minutes after the API does (so a short-lived process, like a test run, never reaches
-it) and only does anything for workspaces with emails queued in a CheapSequencer campaign.
+Each run looks at every workspace with emails queued in a CheapSequencer campaign: it records sends,
+replies and stops, and writes the follow-ups that are nearly due. Nothing is kept between runs: each
+one works out what's due from CheapSequencer and the database, so a late or skipped run loses nothing.
 """
 
-import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -22,8 +24,7 @@ from services import outreach
 from services.generation import EmailWriter
 from services.sending import SequencerClient
 
-START_AFTER_SECONDS = 120
-EVERY_SECONDS = 1800
+log = logging.getLogger("coldbrew.jobs")
 
 
 async def workspaces_in_sequence() -> list[UUID]:
@@ -35,8 +36,8 @@ async def workspaces_in_sequence() -> list[UUID]:
 @asynccontextmanager
 async def deps_for(workspace_id: UUID) -> AsyncIterator[outreach.Deps]:
     settings = get_settings()
-    sequencer = SequencerClient(settings.cheapsequencer_api_key)
-    writer = EmailWriter(settings.anthropic_api_key) if settings.anthropic_api_key else None
+    sequencer = SequencerClient(settings.cheapsequencer_api_key, base_url=settings.cheapsequencer_api_url)
+    writer = EmailWriter(settings.anthropic_api_key, base_url=settings.anthropic_base_url) if settings.anthropic_api_key else None
     try:
         async with get_sessionmaker()() as session, get_engine().connect() as conn:
             await conn.execute(text("SET TRANSACTION READ ONLY"))  # Lead Intel is only ever read
@@ -54,12 +55,38 @@ async def deps_for(workspace_id: UUID) -> AsyncIterator[outreach.Deps]:
             await writer.aclose()
 
 
-async def follow_ups_forever() -> None:
-    await asyncio.sleep(START_AFTER_SECONDS)
-    await outreach.follow_up_loop(deps_for, workspaces_in_sequence, EVERY_SECONDS)
+@dataclass
+class CheckSummary:
+    workspaces: int = 0
+    checked: int = 0
+    written: int = 0
+    ended: int = 0
+    cost_usd: float = 0.0
+    failed: list[str] = field(default_factory=list)
 
 
-def start(tasks: list[asyncio.Task]) -> None:
-    """Start the background jobs this configuration can run."""
-    if get_settings().cheapsequencer_api_key:
-        tasks.append(asyncio.create_task(follow_ups_forever(), name="follow-ups"))
+async def check_follow_ups() -> CheckSummary:
+    """One follow-up check across every workspace. One failing workspace never stops the others.
+    Called on a fresh event loop each time, so the database pool is closed again before returning."""
+    summary = CheckSummary()
+    try:
+        if not get_settings().cheapsequencer_api_key:
+            return summary
+        for workspace_id in await workspaces_in_sequence():
+            summary.workspaces += 1
+            try:
+                async with deps_for(workspace_id) as deps:
+                    run = await outreach.run_follow_ups(deps)
+                summary.checked += run.checked
+                summary.written += run.written
+                summary.ended += run.ended
+                summary.cost_usd += run.cost_usd
+                if run.notes:
+                    log.info("follow-ups for %s: %s", workspace_id, run.notes)
+            except Exception:  # noqa: BLE001
+                log.exception("follow-ups failed for workspace %s", workspace_id)
+                summary.failed.append(str(workspace_id))
+    finally:
+        # Pooled connections belong to this run's event loop; the next run gets a new loop.
+        await get_engine().dispose()
+    return summary

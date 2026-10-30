@@ -5,3 +5,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Celery: beat's schedule file and the local filesystem broker
+celerybeat-schedule*
+.celery-broker/

@@ -13,9 +13,7 @@ sends: a campaign only sends once a person activates it in CheapSequencer.
               physical address from Settings (US law asks for an address in commercial email).
 """
 
-import asyncio
 import hashlib
-import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -29,7 +27,6 @@ from services.generation import PromptVersionSpec, Sample, format_samples, write
 from services.prompts import product_variables, render
 from services.sending import SendingError
 
-log = logging.getLogger("coldbrew.outreach")
 
 CAMPAIGN_PREFIX = "Coldbrew: "
 DEFAULT_DELAYS = {2: 3, 3: 5}  # days after the previous email, as the campaigns are set up
@@ -545,25 +542,3 @@ def message_summary(message: dict[str, Any]) -> dict[str, Any]:
         "sent_at": _when(message.get("sent_at")), "subject": message.get("subject") or "",
         "body": message.get("body_text") or message.get("preview") or "",
     }  # fmt: skip
-
-
-# ---------- Every 30 minutes ----------
-
-
-async def follow_up_loop(build_deps, workspace_ids, every_seconds: int = 1800) -> None:
-    """Run the follow-ups for every workspace with emails in a sequence, forever. One failing
-    workspace never stops the others."""
-    while True:
-        try:
-            for workspace_id in await workspace_ids():
-                try:
-                    async with build_deps(workspace_id) as deps:
-                        result = await run_follow_ups(deps)
-                    if result.written or result.notes:
-                        log.info("follow-ups for %s: %s written, %s notes", workspace_id, result.written, result.notes)
-                except Exception:  # noqa: BLE001
-                    log.exception("follow-ups failed for workspace %s", workspace_id)
-        except Exception:  # noqa: BLE001
-            log.exception("follow-up loop failed")
-        await asyncio.sleep(every_seconds)
-
