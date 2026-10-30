@@ -1,4 +1,5 @@
 import hmac
+import time
 from collections.abc import AsyncIterator
 
 import anthropic
@@ -77,6 +78,17 @@ async def require_api_secret(request: Request) -> None:
             raise HTTPException(status_code=403, detail="Not authorized.")
 
 
+# Who a signed-in account is (role, workspaces), kept briefly: looking it up costs two or three database
+# round trips, on every request. The token itself is still checked every time. Cleared whenever an admin
+# changes users or workspace members; another API process picks the change up within SIGN_IN_CACHE_SECONDS.
+SIGN_IN_CACHE_SECONDS = 60
+_sign_ins: dict[UUID, tuple[float, CurrentUser]] = {}
+
+
+def forget_sign_ins() -> None:
+    _sign_ins.clear()
+
+
 async def get_current_user(
     authorization: str | None = Header(default=None), users: UserRepo = Depends(get_user_repo)
 ) -> CurrentUser:
@@ -90,10 +102,17 @@ async def get_current_user(
         claims = await verify(token, settings.jwks_url, settings.auth_issuer)
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=exc.message) from exc
+    cached = _sign_ins.get(claims.auth_user_id)
+    if cached and time.monotonic() - cached[0] < SIGN_IN_CACHE_SECONDS:
+        return cached[1]
     user = await users.for_sign_in(claims.auth_user_id, claims.email)
     if user.status == "deactivated":
         raise HTTPException(status_code=403, detail="Your account is deactivated. Ask an admin to turn it back on.")
-    return CurrentUser(user.id, user.email, user.name, user.role, await users.workspace_ids(user.id))
+    current = CurrentUser(user.id, user.email, user.name, user.role, await users.workspace_ids(user.id))
+    if len(_sign_ins) > 1000:
+        _sign_ins.clear()
+    _sign_ins[claims.auth_user_id] = (time.monotonic(), current)
+    return current
 
 
 def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:

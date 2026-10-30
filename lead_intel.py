@@ -166,18 +166,24 @@ class LeadIntelRepo:
         if q:
             where.append(businesses.c.display_name.ilike(f"%{q}%"))
 
-        total = (await self.conn.execute(select(func.count()).select_from(businesses).where(*where))).scalar_one()
+        # The total rides along on every row (a window count), saving a round trip to the database.
         rows = (
             await self.conn.execute(
-                select(businesses)
+                select(businesses, func.count().over().label("_total"))
                 .where(*where)
                 .order_by(businesses.c.tier.asc().nulls_last(), businesses.c.problem_score.desc().nulls_last(), businesses.c.id)
                 .limit(limit)
                 .offset(offset)
             )
         ).mappings().all()
+        if rows:
+            total = rows[0]["_total"]
+        elif offset:  # past the last page: no row to carry the total
+            total = (await self.conn.execute(select(func.count()).select_from(businesses).where(*where))).scalar_one()
+        else:
+            total = 0
 
-        companies = [dict(row) for row in rows]
+        companies = [{k: v for k, v in row.items() if k != "_total"} for row in rows]
         await self._attach_fields(companies, LIST_FIELDS)
         return companies, total
 

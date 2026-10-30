@@ -5,7 +5,6 @@ from functools import lru_cache
 from uuid import uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -68,7 +67,8 @@ async def get_readonly_conn() -> AsyncIterator[AsyncConnection]:
     except DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     async with engine.connect() as conn:
-        await conn.execute(text("SET TRANSACTION READ ONLY"))
+        # BEGIN READ ONLY in one statement: a separate SET TRANSACTION costs a round trip on every request.
+        await conn.execution_options(postgresql_readonly=True)
         try:
             yield conn
         finally:

@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 import services.auth as auth
 from config import get_settings
-from dependencies import get_current_user, get_user_repo, get_workspace_repo
+from dependencies import forget_sign_ins, get_current_user, get_user_repo, get_workspace_repo
 from main import app
 from services.auth import AuthError, CurrentUser, verify
 from tests.conftest import WORKSPACE_ID
@@ -142,8 +142,10 @@ def signed(jwks, monkeypatch):
     app.dependency_overrides[get_user_repo] = lambda: users
     app.dependency_overrides[get_workspace_repo] = lambda: workspaces
     app.dependency_overrides.pop(get_current_user, None)
+    forget_sign_ins()
     yield SimpleNamespace(client=TestClient(app), users=users, workspaces=workspaces)
     app.dependency_overrides.clear()
+    forget_sign_ins()
 
 
 def as_(user, **headers):
@@ -181,6 +183,7 @@ def test_members_see_only_their_workspaces_and_deactivated_are_refused(signed) -
     member = signed.users.add("sam@example.com", auth_user_id=uuid4(), workspaces=[WORKSPACE_ID])
     assert [w["name"] for w in signed.client.get("/api/v1/workspaces", headers=as_(member)).json()] == ["AheadTech360"]
     member.status = "deactivated"
+    forget_sign_ins()  # what the admin's change does (see the sign-in cache test)
     r = signed.client.get("/api/v1/workspaces", headers=as_(member))
     assert r.status_code == 403 and "deactivated" in r.json()["detail"]
 
@@ -215,3 +218,22 @@ def test_current_user_can_open() -> None:
     sales = CurrentUser(uuid4(), "s@x.com", "S", "sales", [WORKSPACE_ID])
     assert sales.can_open(WORKSPACE_ID) and not sales.can_open(uuid4())
     assert CurrentUser(uuid4(), "a@x.com", "A", "admin").can_open(uuid4())
+
+
+def test_a_sign_in_is_looked_up_once_a_minute_and_again_after_an_admin_change(signed, monkeypatch) -> None:
+    ava = signed.users.add("ava@example.com", auth_user_id=uuid4(), workspaces=[WORKSPACE_ID])
+    lookups = []
+    real = signed.users.for_sign_in
+
+    async def counted(*args):
+        lookups.append(args)
+        return await real(*args)
+
+    monkeypatch.setattr(signed.users, "for_sign_in", counted)
+    for _ in range(3):
+        assert signed.client.get("/api/v1/me", headers=as_(ava)).status_code == 200
+    assert len(lookups) == 1
+    admin = signed.users.add("boss@example.com", role="admin", auth_user_id=uuid4())
+    r = signed.client.patch(f"/api/v1/users/{ava.id}", headers=as_(admin), json={"status": "deactivated"})
+    assert r.status_code == 200
+    assert signed.client.get("/api/v1/me", headers=as_(ava)).status_code == 403  # refused straight away

@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from crud import UserRepo, WorkspaceRepo
-from dependencies import get_current_user, get_user_repo, get_workspace_repo, require_admin
+from dependencies import forget_sign_ins, get_current_user, get_user_repo, get_workspace_repo, require_admin
 from schemas import WorkspaceIn, WorkspaceMembersIn, WorkspaceOut, WorkspaceUpdate
 from services.auth import CurrentUser
 
@@ -63,6 +63,7 @@ async def delete_workspace(
     if len(await workspaces.list()) <= 1:
         raise HTTPException(status_code=409, detail="It's the only workspace. Create another one first.")
     await workspaces.delete(workspace)
+    forget_sign_ins()
     return Response(status_code=204)
 
 
@@ -77,4 +78,5 @@ async def set_members(
     """Exactly these people can open the workspace (admins open every workspace anyway)."""
     await _get_or_404(workspaces, workspace_id)
     await users.set_workspace_members(workspace_id, body.user_ids)
+    forget_sign_ins()
     return Response(status_code=204)

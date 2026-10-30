@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from config import get_settings
 from crud import (
@@ -40,7 +40,7 @@ async def deps_for(workspace_id: UUID) -> AsyncIterator[outreach.Deps]:
     writer = EmailWriter(settings.anthropic_api_key, base_url=settings.anthropic_base_url) if settings.anthropic_api_key else None
     try:
         async with get_sessionmaker()() as session, get_engine().connect() as conn:
-            await conn.execute(text("SET TRANSACTION READ ONLY"))  # Lead Intel is only ever read
+            await conn.execution_options(postgresql_readonly=True)  # Lead Intel is only ever read
             try:
                 yield outreach.Deps(
                     workspace_id, SendingRepo(session), SettingsRepo(session), IcpProfileRepo(session), PromptRepo(session),

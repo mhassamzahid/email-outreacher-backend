@@ -15,7 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from crud import UserRepo
-from dependencies import get_current_user, get_user_repo, require_admin
+from dependencies import forget_sign_ins, get_current_user, get_user_repo, require_admin
 from schemas import UserIn, UserOut, UserUpdate
 from services.auth import CurrentUser
 
@@ -75,6 +75,7 @@ async def update_user(
         raise HTTPException(status_code=409, detail="This is the last active admin. Make someone else an admin first.")
     workspace_ids = body.workspace_ids if "workspace_ids" in body.model_fields_set else None
     user = await users.update(user, values, workspace_ids)
+    forget_sign_ins()
     return _out(user, await users.workspace_ids(user.id))
 
 
@@ -90,4 +91,5 @@ async def remove_user(user_id: UUID, admin: CurrentUser = Depends(require_admin)
     if user.role == "admin" and await _active_admins(users, user.id) == 0:
         raise HTTPException(status_code=409, detail="This is the last active admin.")
     await users.delete(user)
+    forget_sign_ins()
     return Response(status_code=204)

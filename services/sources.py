@@ -11,6 +11,7 @@ Apify prices come from Apify itself (the actor's published price for the account
 stay right when Apify or the plan changes. See `apify_prices`.
 """
 
+import asyncio
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -107,18 +108,25 @@ async def apify_prices(apify: ApifyClient) -> tuple[str, dict[str, tuple[float |
     if tier is None:
         tier = ((await apify.get("/users/me")).get("data", {}).get("plan") or {}).get("tier") or "FREE"
         _cache["tier"] = (time.monotonic(), tier)
+
+    async def actor(name: str) -> dict[str, Any] | None:
+        hit = _cached(name)
+        if hit is None:
+            try:
+                hit = (await apify.get(f"/acts/{name.replace('/', '~')}")).get("data") or {}
+            except ApifyError:
+                return None  # one missing actor never hides the others
+            _cache[name] = (time.monotonic(), hit)
+        return hit
+
+    # All at once: one after another, a cold cache took about ten seconds.
+    names = sorted({s.actor for s in SOURCES if s.actor})
+    actors = dict(zip(names, await asyncio.gather(*(actor(n) for n in names)), strict=True))
     prices: dict[str, tuple[float | None, float | None]] = {}
     for source in SOURCES:
-        if not source.actor:
-            continue
-        actor = _cached(source.actor)
-        if actor is None:
-            try:
-                actor = (await apify.get(f"/acts/{source.actor.replace('/', '~')}")).get("data") or {}
-            except ApifyError:
-                continue  # one missing actor never hides the others
-            _cache[source.actor] = (time.monotonic(), actor)
-        prices[f"{source.kind}:{source.id}"] = (event_price(actor, source.event, tier), event_price(actor, source.start_event, tier))
+        found = actors.get(source.actor) if source.actor else None
+        if found is not None:
+            prices[f"{source.kind}:{source.id}"] = (event_price(found, source.event, tier), event_price(found, source.start_event, tier))
     return tier, prices
 
 
