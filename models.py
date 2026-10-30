@@ -634,6 +634,9 @@ class Email(Base):
     # Where CheapSequencer holds it once queued.
     sequencer_list_id: Mapped[str | None] = mapped_column(Text, default=None)
     sequencer_lead_id: Mapped[str | None] = mapped_column(Text, default=None)
+    # The mailbox CheapSequencer assigned the lead: all three emails go out from it.
+    sequencer_inbox_id: Mapped[str | None] = mapped_column(Text, default=None)
+    sequencer_inbox_email: Mapped[str | None] = mapped_column(Text, default=None)
     sequencer_campaign_id: Mapped[str | None] = mapped_column(Text, default=None)
     queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # On the step-1 email: where the lead's enrollment stands, as last read from CheapSequencer.

@@ -318,6 +318,11 @@ async def run_follow_ups(deps: Deps, now: datetime | None = None) -> FollowUpRun
             continue
         delays[campaign_id] = delays_of(campaign)
         enrollments[campaign_id] = {str(((r.get("lead") or {}).get("email") or "")).lower(): r for r in rows}
+    try:
+        mailboxes = {m["id"]: m.get("email") for m in await deps.sequencer.inboxes() if m.get("id")}
+    except SendingError as exc:
+        mailboxes = {}
+        run.notes.append(exc.message)
 
     existing = await deps.sending.follow_ups([lead.id for _, lead in pairs])
     to_write: dict[str, list[tuple[Email, Lead, int, str, Any]]] = {}
@@ -328,6 +333,9 @@ async def run_follow_ups(deps: Deps, now: datetime | None = None) -> FollowUpRun
         run.checked += 1
         p = progress(row)
         email.sequencer_lead_id = (row.get("lead") or {}).get("id") or email.sequencer_lead_id
+        if inbox_id := row.get("assigned_inbox_id"):
+            email.sequencer_inbox_id = inbox_id
+            email.sequencer_inbox_email = mailboxes.get(inbox_id) or email.sequencer_inbox_email
         email.sequence_status, email.sequence_sent_count = p.status, p.sent
         email.sequence_last_sent_at, email.sequence_stop_reason = p.last_sent_at, p.stop_reason
         email.sequence_synced_at, email.sequence_raw = now, row

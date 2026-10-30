@@ -108,6 +108,10 @@ class SequencerClient(_Client):
         """Each lead's place in the campaign: status, sent_count, last_sent_at, replied_at..."""
         return await self.all(f"/campaigns/{campaign_id}/enrollments")
 
+    async def inboxes(self) -> list[dict[str, Any]]:
+        """The sending mailboxes (id, email, display_name...)."""
+        return await self.all("/inboxes")
+
     # ---- Writes: never activate, never send. ----
 
     async def _write(self, method: str, path: str, key: str, body: Any = None, etag: str | None = None) -> dict[str, Any]:

@@ -91,7 +91,9 @@ def lead(email="ana@shop.com", first="Ana", icp=ICP):
 
 def email(status="approved", **extra):
     defaults = dict(id=uuid4(), status=status, subject="Quick idea", body="Body one", edited_body=None, hook="",
-                    sequencer_campaign_id=None, sequencer_list_id=None, sequencer_lead_id=None, sent_at=None)  # fmt: skip
+                    sequencer_campaign_id=None, sequencer_list_id=None, sequencer_lead_id=None, sent_at=None,
+                    sequencer_inbox_id=None, sequencer_inbox_email=None, sequence_status=None, sequence_sent_count=0,
+                    sequence_stop_reason=None, sequence_last_sent_at=None, sequence_synced_at=None, queued_at=None)  # fmt: skip
     return SimpleNamespace(**(defaults | extra))
 
 
@@ -128,6 +130,7 @@ class Sequencer:
         self.list_campaigns, self.enrolled, self.imports, self.patched = campaigns, [], [], []
         self.rows = enrollments or []
         self.fail = fail
+        self.list_threads, self.detail = {}, {}
 
     async def campaigns(self):
         return self.list_campaigns
@@ -152,6 +155,9 @@ class Sequencer:
 
     async def set_steps(self, campaign_id, steps, etag, key):
         self.patched.append((campaign_id, steps, etag))
+
+    async def inboxes(self):
+        return [{"id": "in1", "email": "emily@meetaheadtech360.com"}]
 
 
 class Repo:
@@ -252,7 +258,7 @@ def test_templates_already_in_place_are_left_alone() -> None:
 
 
 def enrollment(address, **extra):
-    return {"lead": {"id": "L-" + address, "email": address.upper()}, "status": "active", "sent_count": 1,
+    return {"lead": {"id": "L-" + address, "email": address.upper()}, "status": "active", "sent_count": 1, "assigned_inbox_id": "in1",
             "last_sent_at": (NOW - timedelta(days=2)).isoformat()} | extra  # fmt: skip
 
 
@@ -290,6 +296,7 @@ def test_follow_ups_are_written_only_for_leads_who_have_not_replied(claude) -> N
     assert sending.added == [(due[0].id, 2, "Hi Ana, one more thought.")]
     assert all(p[0].status == "sent" for p in (due, replied, early))  # email 1 went out to all three
     assert replied[0].sequence_stop_reason == "replied" and due[0].sequencer_lead_id == "L-due@x.com"
+    assert (due[0].sequencer_inbox_id, due[0].sequencer_inbox_email) == ("in1", "emily@meetaheadtech360.com")
     assert result.cost_usd > 0
 
 
@@ -336,3 +343,4 @@ def test_import_rows_uploads_a_csv_and_waits_for_it() -> None:
     writes = [(m, p, h) for m, p, h in seen if m == "POST"]
     assert [p.rsplit("/", 1)[-1] for _, p, _ in writes] == ["upload-url", "mapping-suggestion", "mapping", "process"]
     assert all(" " not in h["idempotency-key"] for _, _, h in writes)
+
