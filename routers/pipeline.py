@@ -58,6 +58,7 @@ from services.google_places import CENTER_COST_USD, SEARCH_COST_USD, PlacesClien
 from services.identity import identity_keys
 from services.research import research_companies
 from services.scoring import CompanyScorer, PromptSpec
+from models import VERIFICATION_SOURCES
 from services.website import WebsiteReader, normalize_domain
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
@@ -286,10 +287,16 @@ async def research(
         spec = None if version is None else PromptSpec(
             version.system_prompt, version.user_prompt, version.model, version.max_tokens, str(version.id)
         )
-        summary = await research_companies(
-            group, icp, profile_dict, reader, apify, scorer, settings.company_score_threshold, spec,
-            max_pages=limits["research_max_pages"], max_seconds=limits["research_max_seconds"],
-        )  # fmt: skip
+        # The ICP's verification sources: each one switched off is skipped for its companies.
+        sources = set(profile.verification_sources if profile else VERIFICATION_SOURCES)
+        with reader.jina_off("jina" not in sources):
+            summary = await research_companies(
+                group, icp, profile_dict, reader, apify if "instagram" in sources else None,
+                scorer if "score" in sources else None, settings.company_score_threshold, spec,
+                max_pages=limits["research_max_pages"], max_seconds=limits["research_max_seconds"],
+                read_website="website" in sources,
+                unscored="Claude's fit score is off for this ICP" if scorer and "score" not in sources else "ANTHROPIC_API_KEY is not set",
+            )  # fmt: skip
         for company in group:
             await companies.save(company)
         # Everything read is kept: each page's full text, and the company's own Instagram posts.

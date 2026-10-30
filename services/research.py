@@ -101,13 +101,17 @@ async def research_companies(
     prompt: PromptSpec | None = None,
     max_pages: int = AI_MAX_PAGES,
     max_seconds: float = AI_BUDGET_SECONDS,
+    read_website: bool = True,
+    unscored: str = "ANTHROPIC_API_KEY is not set",
 ) -> ResearchSummary:
+    """`read_website` False: the ICP has its website switched off as a verification source. `unscored`:
+    why there's no Claude score when `scorer` is None."""
     summary = ResearchSummary()
     gate = asyncio.Semaphore(READ_CONCURRENCY)
 
     async def read(company: Company) -> SiteRead | None:
         target = company.domain or normalize_domain(company.website_url)
-        if not target:
+        if not target or not read_website:
             return None
         async with gate:
             # With Claude, only the homepage now: Claude chooses each further page (see decide).
@@ -224,7 +228,7 @@ async def research_companies(
                 "reading": chosen,
             }  # fmt: skip
 
-        unread = "" if site and site.reached else " (their website couldn't be read)"
+        unread = "" if site and site.reached else (" (their website couldn't be read)" if read_website else " (website not read: off for this ICP)")
         if not rule.fit:
             status, reason = "not_fit", rule.reason + unread
             # Claude read the site before the rule ran: keep what it said, the rule still decides.
@@ -233,7 +237,7 @@ async def research_companies(
             else:
                 keep_score(*reading)
         elif scorer is None:
-            status, reason = "qualified", f"Passes the ICP's rule: {rule.reason}. Not scored: ANTHROPIC_API_KEY is not set"
+            status, reason = "qualified", f"Passes the ICP's rule: {rule.reason}. Not scored: {unscored}"
         else:
             if reading is None:
                 # The site couldn't be read: Claude scores from Instagram and Apollo alone.

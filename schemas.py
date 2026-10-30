@@ -35,7 +35,13 @@ class IcpProfileIn(ApiModel):
     tone: str = ""
     words_to_avoid: str = ""
     hook_guidance: str = ""
+    # Lead analysis: whose posts are read for the opening line.
     enabled_sources: list[str] = []
+    # Verification: what research reads to decide whether a business is worth contacting.
+    verification_sources: list[Literal["website", "jina", "instagram", "score"]] = ["website", "jina", "instagram", "score"]
+    # Lead analysis limits for this ICP; null means the workspace setting.
+    posts_per_source: int | None = Field(default=None, ge=1, le=20)
+    max_post_age_days: int | None = Field(default=None, ge=1, le=365)
     # What we sell to this ICP (eo_products), or none.
     product_id: UUID | None = None
     # Null uses the workspace's default prompt of that kind.

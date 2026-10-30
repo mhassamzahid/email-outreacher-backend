@@ -39,7 +39,8 @@ def store(client):
 def test_the_starting_estimate_only_prices_what_has_a_source() -> None:
     estimate = CostEstimate(**DEFAULT_ESTIMATE)
     priced = {i.id for i in estimate.items if i.price_usd}
-    assert priced == {"email-generation", "follow-up", "verification", "maps-search", "maps-location", "cheapsequencer", "cheapinboxes"}
+    assert priced == {"email-generation", "follow-up", "verification", "maps-search", "maps-location", "linkedin-posts",
+                      "instagram-posts", "cheapsequencer", "cheapinboxes"}  # fmt: skip
     assert all(i.note for i in estimate.items)  # every line says where its number comes from
     # Claude lines are priced from tokens and the model's price table.
     email = next(i for i in estimate.items if i.id == "email-generation")

@@ -356,6 +356,11 @@ class PromptVersion(Base):
     created_at: Mapped[datetime] = _created()
 
 
+# What research may read to verify a business: its website (our own reader), Jina when the reader is
+# blocked, its Instagram profile (Apify), and Claude's fit score.
+VERIFICATION_SOURCES = ("website", "jina", "instagram", "score")
+
+
 class IcpProfile(Base):
     """What the outreach side needs to know about a Lead Intel ICP to write emails for it."""
 
@@ -374,7 +379,15 @@ class IcpProfile(Base):
     tone: Mapped[str] = mapped_column(Text, default="", server_default="")
     words_to_avoid: Mapped[str] = mapped_column(Text, default="", server_default="")
     hook_guidance: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Lead analysis: whose posts are read for the opening line (linkedin, instagram).
     enabled_sources: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
+    # Verification: what research reads to decide whether a business is worth contacting.
+    verification_sources: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=lambda: list(VERIFICATION_SOURCES), server_default="{website,jina,instagram,score}"
+    )
+    # Lead analysis limits for this ICP; None means the workspace setting.
+    posts_per_source: Mapped[int | None] = mapped_column(SmallInteger, default=None)
+    max_post_age_days: Mapped[int | None] = mapped_column(Integer, default=None)
     # Null uses the workspace's default prompt of that kind.
     hook_prompt_id: Mapped[UUID | None] = mapped_column(ForeignKey("eo_prompts.id", ondelete="SET NULL"), default=None)
     # The CheapSequencer campaign this ICP's emails are queued into.

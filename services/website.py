@@ -19,6 +19,8 @@ time, under the same rules, up to a number of pages and seconds the workspace se
 import asyncio
 import re
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 from html.parser import HTMLParser
@@ -226,6 +228,17 @@ class WebsiteReader:
         self._jina = jina
         self._sleep = sleep
         self._clock = clock
+
+    @contextmanager
+    def jina_off(self, off: bool = True) -> Iterator[None]:
+        """Read without Jina for a while (an ICP that has it switched off): only our own reader."""
+        saved = self._jina
+        if off:
+            self._jina = None
+        try:
+            yield
+        finally:
+            self._jina = saved
 
     async def aclose(self) -> None:
         await self._client.aclose()

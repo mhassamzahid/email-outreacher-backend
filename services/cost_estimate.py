@@ -14,6 +14,9 @@ from services.claude import PRICES
 from services.google_places import CENTER_COST_USD, SEARCH_COST_USD
 
 CLAUDE_MODEL = "claude-haiku-5-5"
+# Apify's published rates for the post actors Coldbrew uses (also in the frontend's lib/costs.ts).
+LINKEDIN_POST_USD = 0.002
+INSTAGRAM_POST_USD = 0.0027
 
 
 def claude_price(model: str, tokens_in: int, tokens_out: int) -> float:
@@ -68,10 +71,10 @@ DEFAULT_ESTIMATE: dict[str, Any] = {
         _item("website-pages", "Website reading (Jina)", "Verification", "per page", 0, 0, "month",
               "Free up to Jina's rate limit without a key; enter your plan's price per page if you pay."),
         # Lead analysis: each lead's recent posts, read to find something to open the email with
-        _item("linkedin-posts", "LinkedIn posts (Apify)", "Lead analysis", "per post", 0, 5, "lead",
-              "5 posts per lead is the default in Settings. Enter Apify's price per post."),
-        _item("instagram-posts", "Instagram posts (Apify)", "Lead analysis", "per post", 0, 5, "lead",
-              "5 posts per lead is the default in Settings. Enter Apify's price per post."),
+        _item("linkedin-posts", "LinkedIn posts (Apify)", "Lead analysis", "per post", LINKEDIN_POST_USD, 5, "lead",
+              "About $2 per 1,000 posts, the Apify actor's published rate. 5 posts per lead is the Settings default."),
+        _item("instagram-posts", "Instagram posts (Apify)", "Lead analysis", "per post", INSTAGRAM_POST_USD, 5, "lead",
+              "Up to $2.70 per 1,000 posts, the Apify actor's published rate. 5 posts per lead is the Settings default."),
         # Subscriptions
         _item("cheapsequencer", "CheapSequencer Starter", "Sending", "per month", 29, 1, "month",
               "10,000 campaign sends a month; warmup is free and unlimited. CheapSequencer's published price."),

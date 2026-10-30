@@ -249,3 +249,32 @@ async def test_claude_reads_one_page_at_a_time_and_decides_when_to_stop() -> Non
     assert good.score_detail["reading"] == [{"url": "https://inkco.com/about", "reason": "See what they make", "read": True}]
     assert [p["url"] for p in good.research["website"]["pages"]] == ["https://inkco.com/", "https://inkco.com/about"]
     assert len(summary.pages[good.id][1]) == 2  # both pages kept with their text, for eo_company_pages
+
+
+@sync
+async def test_an_icp_with_its_website_switched_off_never_reads_it() -> None:
+    ink = company("Ink Co", "inkco.com")
+    reader = FakeReader({"inkco.com": site("inkco.com", "Same day screen printing")})
+    await research_companies([ink], ICP, None, reader, None, None, 60, read_website=False)
+    assert reader.read_calls == []
+    # The rule needs website words it never got, and says why.
+    assert ink.status == "not_fit" and "website not read: off for this ICP" in ink.status_reason
+
+
+@sync
+async def test_fit_score_switched_off_says_so() -> None:
+    ink = company("Ink Co", "inkco.com")
+    reader = FakeReader({"inkco.com": site("inkco.com", "Same day screen printing")})
+    await research_companies([ink], ICP, None, reader, None, None, 60, unscored="Claude's fit score is off for this ICP")
+    assert ink.status == "qualified" and ink.status_reason.endswith("Not scored: Claude's fit score is off for this ICP")
+
+
+def test_jina_can_be_switched_off_for_a_while() -> None:
+    from services.website import WebsiteReader
+
+    reader = WebsiteReader(jina=object())
+    with reader.jina_off():
+        assert reader._jina is None
+    assert reader._jina is not None
+    with reader.jina_off(False):
+        assert reader._jina is not None
