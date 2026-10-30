@@ -22,8 +22,8 @@ def claude_price(model: str, tokens_in: int, tokens_out: int) -> float:
 
 
 def _claude(id_: str, name: str, unit: str, action: str | None, tokens_in: int, tokens_out: int, quantity: float, basis: str,
-            note: str) -> dict[str, Any]:  # fmt: skip
-    return {"id": id_, "name": name, "category": "AI (Claude)", "unit_label": unit, "model": CLAUDE_MODEL,
+            note: str, category: str = "AI (Claude)") -> dict[str, Any]:  # fmt: skip
+    return {"id": id_, "name": name, "category": category, "unit_label": unit, "model": CLAUDE_MODEL,
             "tokens_in": tokens_in, "tokens_out": tokens_out, "price_usd": claude_price(CLAUDE_MODEL, tokens_in, tokens_out),
             "quantity": quantity, "basis": basis, "action": action, "note": note, "enabled": True}  # fmt: skip
 
@@ -44,8 +44,8 @@ DEFAULT_ESTIMATE: dict[str, Any] = {
                 "Tokens per lead measured on 30 Oct 2026 (2 leads). More posts or a bigger model cost more."),
         _claude("follow-up", "Follow-up writing", "per follow-up", "Write follow-ups", 2017, 933, 2, "lead",
                 "Measured on 30 Oct 2026. Only written for leads who haven't replied, so fewer with a high reply rate."),
-        _claude("verification", "Company verification (research score)", "per company", "Research companies", 4992, 386, 0, "month",
-                "Measured on 30 Oct 2026 (1 company). Enter how many companies you research a month."),
+        _claude("verification", "Claude's fit score", "per company", "Research companies", 4992, 386, 0, "month",
+                "Measured on 30 Oct 2026 (1 company). Enter how many companies you research a month.", "Verification"),
         _claude("prompt-improvement", "Prompt improvement", "per run", "Improve prompt", 0, 0, 0, "month",
                 "No runs measured yet: enter tokens once you've used it, or leave at 0."),
         # Finding companies
@@ -62,14 +62,15 @@ DEFAULT_ESTIMATE: dict[str, Any] = {
               "Enter Apify's price per profile for the LinkedIn people actor."),
         _item("apollo-reveal", "Email reveal (Apollo)", "Finding people", "per email revealed", 0, 1, "lead",
               "One Apollo credit per revealed email: enter your plan's price per credit."),
-        # Research and posts
-        _item("instagram-profile", "Instagram profile check (Apify)", "Research and posts", "per profile", 0, 0, "month",
+        # Verification: the sources used to decide whether a business is worth contacting
+        _item("instagram-profile", "Instagram profile check (Apify)", "Verification", "per profile", 0, 0, "month",
               "Research reads a company's Instagram profile: enter Apify's price per profile and companies a month."),
-        _item("website-pages", "Website reading (Jina)", "Research and posts", "per page", 0, 0, "month",
+        _item("website-pages", "Website reading (Jina)", "Verification", "per page", 0, 0, "month",
               "Free up to Jina's rate limit without a key; enter your plan's price per page if you pay."),
-        _item("linkedin-posts", "LinkedIn posts (Apify)", "Research and posts", "per post", 0, 5, "lead",
+        # Lead analysis: each lead's recent posts, read to find something to open the email with
+        _item("linkedin-posts", "LinkedIn posts (Apify)", "Lead analysis", "per post", 0, 5, "lead",
               "5 posts per lead is the default in Settings. Enter Apify's price per post."),
-        _item("instagram-posts", "Instagram posts (Apify)", "Research and posts", "per post", 0, 5, "lead",
+        _item("instagram-posts", "Instagram posts (Apify)", "Lead analysis", "per post", 0, 5, "lead",
               "5 posts per lead is the default in Settings. Enter Apify's price per post."),
         # Subscriptions
         _item("cheapsequencer", "CheapSequencer Starter", "Sending", "per month", 29, 1, "month",
@@ -117,6 +118,10 @@ def refresh(estimate: dict[str, Any], scoring_model: str, overrides: dict[str, f
         elif start is not None:
             item["price_usd"] = overrides.get(item["id"], start["price_usd"])
             item["unit_label"] = start["unit_label"]
+        if start is not None:
+            # Lines Coldbrew knows keep their place: verification sources, lead analysis, and so on.
+            item["category"] = start["category"]
+            item["name"] = start["name"]
         elif item["id"] in overrides:
             item["price_usd"] = overrides[item["id"]]
         items.append(item)
