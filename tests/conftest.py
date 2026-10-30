@@ -5,7 +5,10 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from dependencies import get_current_user, get_exclusion_repo, get_icp_profile_repo, get_lead_intel_repo, get_workspace_company_repo
+from dependencies import (
+    get_current_user, get_exclusion_repo, get_icp_profile_repo, get_lead_intel_repo, get_optional_inboxes, get_optional_sequencer,
+    get_workspace_company_repo,
+)  # fmt: skip
 from main import app
 from services.auth import CurrentUser
 
@@ -169,6 +172,21 @@ def exclusions() -> FakeExclusions:
 @pytest.fixture
 def profiles() -> FakeIcpProfileRepo:
     return FakeIcpProfileRepo()
+
+
+@pytest.fixture(autouse=True)
+def no_real_sending(monkeypatch):
+    """Tests never reach CheapSequencer or CheapInboxes: their keys are blanked and their clients are None
+    unless a test fakes them over HTTP. Nothing can create, change or send anything there."""
+    from config import get_settings
+
+    monkeypatch.setattr(get_settings(), "cheapsequencer_api_key", None)
+    monkeypatch.setattr(get_settings(), "cheapinboxes_api_key", None)
+    app.dependency_overrides[get_optional_sequencer] = lambda: None
+    app.dependency_overrides[get_optional_inboxes] = lambda: None
+    yield
+    for dep in (get_optional_sequencer, get_optional_inboxes):
+        app.dependency_overrides.pop(dep, None)
 
 
 @pytest.fixture
