@@ -7,11 +7,17 @@ Run them next to the API (see README):
 Beat starts the follow-up check every FOLLOWUP_CHECK_SECONDS (30 minutes by default).
 """
 
+import sys
 from pathlib import Path
 
-from celery import Celery
+# The `celery` command puts this folder on the import path only while it loads this module, then takes
+# that entry out again. A job imports `main` later, when it first runs (background.py), so a second entry
+# is added at the end: Celery removes only its own (the first), and this one stays.
+sys.path.append(str(Path(__file__).resolve().parent))
 
-from config import get_settings
+from celery import Celery  # noqa: E402
+
+from config import get_settings  # noqa: E402
 
 settings = get_settings()
 
