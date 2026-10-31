@@ -412,7 +412,11 @@ async def find_stakeholders(
                 people, run = await apify.company_employees(c.linkedin_url or c.name, titles, body.max_per_company)  # type: ignore[union-attr]
                 cost += run.cost_usd or 0
                 await calls.record(workspace_id, "apify", EMPLOYEES_ACTOR, "succeeded", cost_usd=run.cost_usd, action="Find stakeholders")
-                new = await stakeholders.save_employees(workspace_id, c.lead_intel_business_id, people, pipeline_company_id=c.id)
+                for p in people:
+                    p.company_name = p.company_name or c.name
+                new = await stakeholders.save_employees(
+                    workspace_id, c.lead_intel_business_id, people, pipeline_company_id=c.id, icp_id=c.icp_id
+                )
                 results.append(CompanySearchResult(company_id=cid, name=name, status="searched", found=len(people), new=new))
         except (ApolloError, ApifyError) as exc:
             provider = "apollo" if body.source == "apollo" else "apify"

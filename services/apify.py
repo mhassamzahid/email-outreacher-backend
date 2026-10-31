@@ -26,6 +26,8 @@ INSTAGRAM_PROFILE_ACTOR = "apify~instagram-profile-scraper"
 
 RUN_TIMEOUT = 300  # seconds to wait for a run before giving up on it
 TERMINAL = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
+COST_READS = 6  # reads of a finished run's cost while Apify settles it, COST_WAIT_SECONDS apart
+COST_WAIT_SECONDS = 2
 
 
 class ApifyError(Exception):
@@ -221,9 +223,14 @@ class ApifyClient:
         items = await self._request(
             "GET", f"/datasets/{run['defaultDatasetId']}/items", params={"clean": "true", "format": "json", "limit": max_items}
         )
-        cost = run.get("usageTotalUsd")
-        if not cost:
-            # Apify fills in the run's cost a moment after it finishes; read it again once.
+        # Apify settles a run's cost in the seconds after it finishes: it can read 0, then only the start fee,
+        # then the full charge (a "no result" event lands last). Read until two reads agree.
+        cost, previous = run.get("usageTotalUsd"), None
+        for _ in range(COST_READS):
+            if cost and cost == previous:
+                break
+            previous = cost
+            await asyncio.sleep(min(self._poll, COST_WAIT_SECONDS))
             cost = (await self._request("GET", f"/actor-runs/{run['id']}"))["data"].get("usageTotalUsd")
         return RunResult(items=items if isinstance(items, list) else [], cost_usd=float(cost) if cost is not None else None, run_id=run.get("id"))
 
@@ -248,15 +255,17 @@ class ApifyClient:
             key = item.get("id") or item.get("publicIdentifier") or linkedin_slug(url)
             if not key:
                 continue
-            position = (item.get("currentPosition") or [{}])[0] or {}
+            # The actor's current output has `currentPositions` ({title, companyName, company}); older runs had
+            # `currentPosition` ({position, companyName}).
+            position = (item.get("currentPositions") or item.get("currentPosition") or [{}])[0] or {}
             people.append(
                 Employee(
                     external_id=str(key),
                     first_name=item.get("firstName") or "",
                     last_name=item.get("lastName") or "",
-                    title=position.get("position") or item.get("headline") or "",
+                    title=position.get("title") or position.get("position") or item.get("headline") or "",
                     linkedin_url=url,
-                    company_name=position.get("companyName"),
+                    company_name=position.get("companyName") or (position.get("company") or {}).get("name"),
                     raw=item,
                 )
             )

@@ -6,7 +6,7 @@ import pytest
 
 import routers.stakeholders as stakeholders_router
 from database import get_session
-from dependencies import get_apollo, get_provider_call_repo, get_stakeholder_repo
+from dependencies import get_apollo, get_company_repo, get_provider_call_repo, get_stakeholder_repo
 from main import app
 from services.apollo import ApolloError, FoundPerson, RevealedPerson
 from tests.conftest import COMPANY_ID, ICP_ID, WORKSPACE_ID
@@ -69,13 +69,13 @@ class FakeStakeholders:
                 new += 1
         return new
 
-    async def save_employees(self, ws, company_id, people, pipeline_company_id=None):
+    async def save_employees(self, ws, company_id, people, pipeline_company_id=None, icp_id=None):
         new = 0
         for p in people:
             if not any(r.external_id == p.external_id for r in self.rows.values()):
                 row = SimpleNamespace(
-                    id=uuid4(), workspace_id=ws, lead_intel_business_id=company_id, lead_intel_icp_id=None,
-                    organization_name=p.company_name, source="apify_linkedin", external_id=p.external_id,
+                    id=uuid4(), workspace_id=ws, lead_intel_business_id=company_id, lead_intel_icp_id=icp_id,
+                    company_id=pipeline_company_id, organization_name=p.company_name, source="apify_linkedin", external_id=p.external_id,
                     first_name=p.first_name, last_name=p.last_name, title=p.title, seniority=None,
                     linkedin_url=p.linkedin_url, has_email=None, email=None, email_status=None, revealed_at=None,
                     lead_id=None, found_at=datetime.now(UTC),
@@ -106,6 +106,16 @@ class FakeCalls:
         self.details.append(detail)
 
 
+class FakePipelineCompanies:
+    """eo_companies for the people found at them: Google Maps and Apollo companies, not in Lead Intel."""
+
+    def __init__(self) -> None:
+        self.rows: dict = {}
+
+    async def get_many(self, ws, ids):
+        return [self.rows[i] for i in ids if i in self.rows]
+
+
 @pytest.fixture
 def apollo_env(client, workspace_companies, monkeypatch):
     apollo, rows, calls = FakeApollo(), FakeStakeholders(), FakeCalls()
@@ -113,15 +123,18 @@ def apollo_env(client, workspace_companies, monkeypatch):
     app.dependency_overrides[get_stakeholder_repo] = lambda: rows
     app.dependency_overrides[get_provider_call_repo] = lambda: calls
     app.dependency_overrides[get_session] = lambda: None
-    leads_made = []
+    pipeline = FakePipelineCompanies()
+    app.dependency_overrides[get_company_repo] = lambda: pipeline
+    leads_made, lead_icps = [], []
 
     async def fake_lead(session, ws, icp_id, company_id, lead, apollo_id, email_status, origin="apollo"):
         leads_made.append(lead)
+        lead_icps.append(icp_id)
         return uuid4(), True
 
     monkeypatch.setattr(stakeholders_router, "lead_from_stakeholder", fake_lead)
     workspace_companies.links[(WORKSPACE_ID, COMPANY_ID)] = datetime.now(UTC)
-    return SimpleNamespace(apollo=apollo, rows=rows, calls=calls, leads=leads_made)
+    return SimpleNamespace(apollo=apollo, rows=rows, calls=calls, leads=leads_made, lead_icps=lead_icps, pipeline=pipeline)
 
 
 def search(client, **body):

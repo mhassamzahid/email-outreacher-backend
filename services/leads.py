@@ -107,6 +107,9 @@ def normalize_url(value: str) -> str:
     return v if re.match(r"^https?://", v, re.I) else f"https://{v}"
 
 
+MEMBER_ID = re.compile(r"^/in/AC[a-zA-Z0-9_-]AA", re.IGNORECASE)
+
+
 def normalize_linkedin(value: str) -> str:
     """One spelling per profile, so the same person can't get in twice through http/www/trailing-slash variants."""
     v = value.strip()
@@ -114,7 +117,10 @@ def normalize_linkedin(value: str) -> str:
         return ""
     parts = urlsplit(normalize_url(v))
     host = parts.netloc.lower().removeprefix("www.")
-    path = parts.path.rstrip("/").lower()
+    path = parts.path.rstrip("/")
+    # Vanity names (/in/ava-morgan) ignore case; member ids (/in/ACwAA...) don't, and LinkedIn refuses them lowered.
+    if not MEMBER_ID.match(path):
+        path = path.lower()
     if not host.endswith("linkedin.com"):
         return normalize_url(v)
     return f"https://www.linkedin.com{path}"

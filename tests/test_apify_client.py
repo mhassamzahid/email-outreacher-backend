@@ -78,6 +78,21 @@ async def test_employees_runs_the_actor_and_maps_people() -> None:
 
 
 @sync
+async def test_employees_reads_the_actors_current_output() -> None:
+    """What the actor returned on 2026-10-31: `currentPositions`, with `title` and the company under `company`."""
+    items = [
+        {"id": "ACwAAFd", "firstName": "Mark", "lastName": "Cordova", "linkedinUrl": "https://www.linkedin.com/in/ACwAAFd",
+         "currentPositions": [{"title": "Owner", "companyName": "Chicago Shirt Prints", "company": {"name": "Chicago Shirt Prints"}}]},
+        {"id": "e2", "firstName": "Jo", "currentPositions": [{"title": "Manager", "company": {"name": "Ink Co"}}]},
+    ]  # fmt: skip
+    transport, _ = fake_apify(items)
+    c = client(transport)
+    people, _ = await c.company_employees("Chicago Shirt Prints", [], 2)
+    await c.aclose()
+    assert [(p.title, p.company_name) for p in people] == [("Owner", "Chicago Shirt Prints"), ("Manager", "Ink Co")]
+
+
+@sync
 async def test_linkedin_posts_input_and_mapping() -> None:
     items = [
         {"type": "post", "id": "7329", "linkedinUrl": "https://www.linkedin.com/posts/ava_x-activity-7329",

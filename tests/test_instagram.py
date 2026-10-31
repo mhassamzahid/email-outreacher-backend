@@ -81,3 +81,24 @@ async def test_run_cost_is_read_again_when_apify_hasnt_filled_it_in() -> None:
     await client.aclose()
     assert result.cost_usd == 0.0026 and result.items == [{"username": "inkco"}]
     assert seen[-1] == "GET /v2/actor-runs/r1"
+
+
+@sync
+async def test_run_cost_is_read_until_apify_settles_it() -> None:
+    """Seen on 2026-10-31: a posts run read $0.00005 (the start fee) straight after it finished, and $0.00105
+    seconds later, once its "no result" charge landed. The cost is read until two reads agree."""
+    settling = [0, 0.00005, 0.00105, 0.00105, 0.00105]
+    reads: list[float] = []
+
+    def apify(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(201, json={"data": {"id": "r1", "status": "SUCCEEDED", "defaultDatasetId": "d1", "usageTotalUsd": 0}})
+        if request.url.path.endswith("/items"):
+            return httpx.Response(200, json=[])
+        reads.append(settling[min(len(reads), len(settling) - 1)])
+        return httpx.Response(200, json={"data": {"id": "r1", "status": "SUCCEEDED", "usageTotalUsd": reads[-1]}})
+
+    client = ApifyClient("token", transport=httpx.MockTransport(apify), poll_seconds=0)
+    result = await client.run("harvestapi~linkedin-profile-posts", {}, 1)
+    await client.aclose()
+    assert result.cost_usd == 0.00105 and len(reads) == 4

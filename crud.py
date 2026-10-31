@@ -746,7 +746,12 @@ class StakeholderRepo:
         return sum(p.apollo_id not in known for p in people)
 
     async def save_employees(
-        self, workspace_id: UUID, company_id: UUID | None, people: list[Employee], pipeline_company_id: UUID | None = None
+        self,
+        workspace_id: UUID,
+        company_id: UUID | None,
+        people: list[Employee],
+        pipeline_company_id: UUID | None = None,
+        icp_id: UUID | None = None,
     ) -> int:
         """Add people found on LinkedIn (via Apify) and refresh known ones; returns how many were new.
 
@@ -768,6 +773,7 @@ class StakeholderRepo:
                 workspace_id=workspace_id,
                 lead_intel_business_id=company_id,
                 company_id=pipeline_company_id,
+                lead_intel_icp_id=icp_id,
                 source="apify_linkedin",
                 external_id=p.external_id,
                 first_name=p.first_name,
@@ -787,6 +793,7 @@ class StakeholderRepo:
                         statement.excluded.lead_intel_business_id, Stakeholder.lead_intel_business_id
                     ),
                     "company_id": func.coalesce(statement.excluded.company_id, Stakeholder.company_id),
+                    "lead_intel_icp_id": func.coalesce(statement.excluded.lead_intel_icp_id, Stakeholder.lead_intel_icp_id),
                 },
             )
             await self.session.execute(statement)

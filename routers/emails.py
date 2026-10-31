@@ -146,6 +146,15 @@ def _spec(version) -> PromptVersionSpec:
     )
 
 
+NO_OFFER = "This ICP has no offer or product yet. Add one on its Definition tab, so the email says what you actually sell."
+
+
+def has_offer(profile: Any, product: Any) -> bool:
+    """Whether the ICP says what we sell. Without it Claude makes something up (seen on 2026-10-31: "keeping event
+    orders and regular jobs in one place"), so no email is written."""
+    return product is not None or bool(profile and (profile.offer or "").strip())
+
+
 @router.post("/generate", response_model=GenerateResult)
 async def generate(
     body: GenerateIn,
@@ -208,6 +217,9 @@ async def generate(
             continue
         profile = (await profiles.get_many(workspace_id, [icp_id])).get(icp_id)
         product = await products.get(workspace_id, profile.product_id) if profile and profile.product_id else None
+        if not has_offer(profile, product):
+            outcomes[lead_id] = GenerateOutcome(lead_id=lead_id, name=_name(lead), status="skipped", reason=NO_OFFER)
+            continue
         hook_version = await prompts.for_icp(workspace_id, "hook", profile.hook_prompt_id if profile else None)
         email_version = await prompts.for_icp(workspace_id, "email", profile.email_prompt_id if profile else None)
         hook_spec, email_spec = _spec(hook_version), _spec(email_version)

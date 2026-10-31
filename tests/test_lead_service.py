@@ -68,6 +68,13 @@ def test_linkedin_variants_collapse_to_one() -> None:
     assert {normalize_linkedin(v) for v in variants} == {"https://www.linkedin.com/in/ava-morgan"}
 
 
+def test_linkedin_member_ids_keep_their_case() -> None:
+    """LinkedIn refuses a lowered member id ("Profile IDs are case-sensitive"), so posts came back empty."""
+    url = "https://www.linkedin.com/in/ACwAAFdDy7oByil4gyhQ08GjsJk8jRQQtpnOPvc"
+    assert normalize_linkedin(url + "/") == url
+    assert normalize_linkedin("linkedin.com/in/ACoAAB1x2Y") == "https://www.linkedin.com/in/ACoAAB1x2Y"
+
+
 def test_validate_needs_email_or_linkedin() -> None:
     assert validate(clean_lead({"company": "X"})) == "Needs an email or a LinkedIn URL"
     assert validate(clean_lead({"linkedin_url": "linkedin.com/in/x"})) is None

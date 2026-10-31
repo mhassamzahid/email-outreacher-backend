@@ -39,8 +39,8 @@ def store(client):
 def test_the_starting_estimate_only_prices_what_has_a_source() -> None:
     estimate = CostEstimate(**DEFAULT_ESTIMATE)
     unpriced = {i.id for i in estimate.items if not i.price_usd and not i.free}
-    # Apollo, Apify people search, hosting: no source Coldbrew can read, so COST_PRICES fills them in.
-    assert unpriced == {"prompt-improvement", "apollo-companies", "apollo-people", "apify-linkedin-people", "apollo-reveal",
+    # Apollo and hosting: no source Coldbrew can read, so COST_PRICES fills them in.
+    assert unpriced == {"prompt-improvement", "apollo-companies", "apollo-people", "apollo-reveal",
                         "railway", "vercel", "supabase"}  # fmt: skip
     assert all(i.note for i in estimate.items)  # every line says where its number comes from
     # Claude lines are priced from tokens and the model's price table.

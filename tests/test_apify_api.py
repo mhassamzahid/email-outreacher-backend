@@ -1,5 +1,6 @@
 """LinkedIn search, add-as-leads and post fetching, with fake Apify and fake repos. No network, no cost."""
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -83,6 +84,22 @@ def test_add_as_leads_needs_linkedin_or_email(client, apify, apollo_env) -> None
     assert lead.linkedin_url == "https://www.linkedin.com/in/ava-morgan" and lead.email == ""
     again = client.post("/api/v1/stakeholders/add-as-leads", json={"stakeholderIds": ids}, headers=WS).json()
     assert again["added"] == 0 and again["skipped"] == 2
+
+
+def test_people_at_a_pipeline_company_become_leads_with_its_name_site_and_icp(client, apify, apollo_env) -> None:  # noqa: F811
+    """Google Maps and Apollo companies aren't in Lead Intel: the lead takes them from the pipeline company,
+    so it has an ICP and can get an email written."""
+    pipeline_id, icp_id = uuid4(), uuid4()
+    apollo_env.pipeline.rows[pipeline_id] = SimpleNamespace(
+        id=pipeline_id, name="Chicago Shirt Prints", domain="chicagoshirtprints.com", website_url=None, icp_id=icp_id
+    )
+    people = [Employee("m1", "Mark", "Cordova", "Owner", "https://www.linkedin.com/in/mark-cordova", None, {})]
+    asyncio.run(apollo_env.rows.save_employees(WORKSPACE_ID, None, people, pipeline_company_id=pipeline_id, icp_id=icp_id))
+    ids = [str(r.id) for r in apollo_env.rows.rows.values()]
+    result = client.post("/api/v1/stakeholders/add-as-leads", json={"stakeholderIds": ids}, headers=WS).json()
+    assert result["added"] == 1
+    [lead] = apollo_env.leads
+    assert (lead.company, lead.website, apollo_env.lead_icps) == ("Chicago Shirt Prints", "https://chicagoshirtprints.com", [icp_id])
 
 
 def test_unrevealed_apollo_people_cannot_be_added_without_revealing(client, apify, apollo_env) -> None:  # noqa: F811

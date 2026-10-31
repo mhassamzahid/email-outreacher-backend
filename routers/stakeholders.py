@@ -74,6 +74,23 @@ def people_template() -> Response:
     )
 
 
+async def _companies_of(lead_intel: LeadIntelRepo, companies: CompanyRepo, workspace_id: UUID, people) -> dict[UUID, dict]:
+    """Each person's company as {display_name, domain, icp_id}: from Lead Intel, or else from the pipeline
+    company they were found at (Google Maps and Apollo companies aren't in Lead Intel)."""
+    li_ids = list({s.lead_intel_business_id for s in people if s.lead_intel_business_id})
+    rows, _ = await lead_intel.list_companies(None, None, max(len(li_ids), 1), 0, only_ids=li_ids)
+    by_li = {c["id"]: c for c in rows}
+    pipeline_ids = list({s.company_id for s in people if s.company_id and s.lead_intel_business_id not in by_li})
+    by_pipeline = {c.id: c for c in await companies.get_many(workspace_id, pipeline_ids)} if pipeline_ids else {}
+    found: dict[UUID, dict] = {}
+    for s in people:
+        if c := by_li.get(s.lead_intel_business_id):
+            found[s.id] = c
+        elif c := by_pipeline.get(s.company_id):
+            found[s.id] = {"display_name": c.name, "domain": c.domain or c.website_url, "icp_id": c.icp_id}
+    return found
+
+
 async def _check_icp(lead_intel: LeadIntelRepo, icp_id: UUID | None) -> None:
     if icp_id and not await lead_intel.get_icp(icp_id):
         raise HTTPException(status_code=404, detail="ICP not found")
@@ -248,6 +265,7 @@ async def add_as_leads(
     workspace_id: UUID = Depends(require_workspace_id),
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
     stakeholders: StakeholderRepo = Depends(get_stakeholder_repo),
+    companies: CompanyRepo = Depends(get_company_repo),
     session: AsyncSession = Depends(get_session),
 ) -> AddAsLeadsResult:
     """Make leads from people you already have a LinkedIn URL or an email for. Free: no provider calls.
@@ -256,16 +274,14 @@ async def add_as_leads(
     """
     ids = list(dict.fromkeys(body.stakeholder_ids))
     found = await stakeholders.get_many(workspace_id, ids)
-    company_ids = list({s.lead_intel_business_id for s in found if s.lead_intel_business_id})
-    companies, _ = await lead_intel.list_companies(None, None, max(len(company_ids), 1), 0, only_ids=company_ids)
-    by_company = {c["id"]: c for c in companies}
+    by_person = await _companies_of(lead_intel, companies, workspace_id, found)
     added = linked = skipped = 0
     for s in found:
         # Unrevealed Apollo people only have a masked name and no contact; reveal them instead.
         if s.lead_id or not (s.linkedin_url or s.email) or (s.source == "apollo" and not s.revealed_at):
             skipped += 1
             continue
-        company = by_company.get(s.lead_intel_business_id) or {}
+        company = by_person.get(s.id) or {}
         lead = clean_lead(
             {
                 "first_name": s.first_name,
@@ -409,6 +425,7 @@ async def reveal(
     lead_intel: LeadIntelRepo = Depends(get_lead_intel_repo),
     stakeholders: StakeholderRepo = Depends(get_stakeholder_repo),
     calls: ProviderCallRepo = Depends(get_provider_call_repo),
+    companies: CompanyRepo = Depends(get_company_repo),
     session: AsyncSession = Depends(get_session),
     apollo: ApolloClient = Depends(get_apollo),
 ) -> StakeholderRevealResult:
@@ -419,9 +436,7 @@ async def reveal(
     """
     ids = list(dict.fromkeys(body.stakeholder_ids))
     found = {s.id: s for s in await stakeholders.get_many(workspace_id, ids)}
-    company_ids = list({s.lead_intel_business_id for s in found.values() if s.lead_intel_business_id})
-    companies, _ = await lead_intel.list_companies(None, None, max(len(company_ids), 1), 0, only_ids=company_ids)
-    by_company = {c["id"]: c for c in companies}
+    by_person = await _companies_of(lead_intel, companies, workspace_id, list(found.values()))
 
     outcomes: list[RevealOutcome] = []
     error: str | None = None
@@ -459,7 +474,7 @@ async def reveal(
             continue
 
         # People found by ICP have no Lead Intel company; Apollo's own company data stands in.
-        company = by_company.get(s.lead_intel_business_id) or {}
+        company = by_person.get(s.id) or {}
         lead = clean_lead(
             {
                 "first_name": person.first_name,
