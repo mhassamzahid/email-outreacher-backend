@@ -86,10 +86,9 @@ class FakeUsers:
         row = next((r for r in self.rows.values() if r.auth_user_id == auth_user_id), None)
         if row is None:
             row = next((r for r in self.rows.values() if r.email == email), None)
-            if row is not None:
-                row.auth_user_id = auth_user_id
-            else:
-                row = self.add(email, auth_user_id=auth_user_id)
+            if row is None or row.auth_user_id is not None:
+                return None
+            row.auth_user_id = auth_user_id
         if row.status == "invited":
             row.status = "active"
         return row
@@ -160,14 +159,19 @@ def test_requests_need_a_session(signed) -> None:
     assert c.get("/api/v1/workspaces", headers={"Authorization": f"Bearer {token(OTHER_KEY)}"}).status_code == 401
 
 
-def test_first_sign_in_is_sales_with_nothing(signed) -> None:
+def test_an_account_nobody_added_is_refused(signed) -> None:
+    """Supabase sign-in is shared with Lead Intel: an account there (or one made by signing up) isn't a Coldbrew user."""
     newcomer = SimpleNamespace(auth_user_id=uuid4(), email="new@example.com")
-    me = signed.client.get("/api/v1/me", headers=as_(newcomer)).json()
-    assert (me["email"], me["role"], me["workspaceIds"]) == ("new@example.com", "sales", [])
-    assert signed.client.get("/api/v1/workspaces", headers=as_(newcomer)).json() == []
-    r = signed.client.get("/api/v1/leads", headers=as_(newcomer, **{"X-Workspace-Id": str(WORKSPACE_ID)}))
-    assert r.status_code == 403 and "access to this workspace" in r.json()["detail"]
-    assert signed.client.get("/api/v1/users", headers=as_(newcomer)).status_code == 403
+    for path in ("/api/v1/me", "/api/v1/workspaces", "/api/v1/icps"):
+        r = signed.client.get(path, headers=as_(newcomer))
+        assert r.status_code == 403 and "hasn't been added" in r.json()["detail"]
+    assert all(r.email != "new@example.com" for r in signed.users.rows.values())  # nothing was created for it
+
+
+def test_an_added_email_cant_be_taken_by_a_second_account(signed) -> None:
+    row = signed.users.add("ava@example.com", auth_user_id=uuid4())
+    other = SimpleNamespace(auth_user_id=uuid4(), email=row.email)
+    assert signed.client.get("/api/v1/me", headers=as_(other)).status_code == 403
 
 
 def test_added_by_email_links_on_first_sign_in(signed) -> None:

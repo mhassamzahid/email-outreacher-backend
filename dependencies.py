@@ -102,6 +102,9 @@ def forget_sign_ins() -> None:
     _sign_ins.clear()
 
 
+NOT_ADDED = "This account hasn't been added to Coldbrew. Ask an admin to add your email on the Users page."
+
+
 async def get_current_user(
     authorization: str | None = Header(default=None), users: UserRepo = Depends(get_user_repo)
 ) -> CurrentUser:
@@ -122,6 +125,8 @@ async def get_current_user(
     if cached and time.monotonic() - cached[0] < SIGN_IN_CACHE_SECONDS:
         return cached[1]
     user = await users.for_sign_in(claims.auth_user_id, claims.email)
+    if user is None:
+        raise HTTPException(status_code=403, detail=NOT_ADDED)
     if user.status == "deactivated":
         raise HTTPException(status_code=403, detail="Your account is deactivated. Ask an admin to turn it back on.")
     current = CurrentUser(user.id, user.email, user.name, user.role, await users.workspace_ids(user.id))

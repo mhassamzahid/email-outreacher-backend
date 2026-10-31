@@ -641,17 +641,16 @@ class UserRepo:
     async def by_email(self, email: str) -> User | None:
         return await self.session.scalar(select(User).where(User.email == email.strip().lower()))
 
-    async def for_sign_in(self, auth_user_id: UUID, email: str) -> User:
-        """The user for a Supabase account: linking a row added by email on first sign-in, or adding a
-        new one as Sales with no workspaces. The last-active time moves at most every 5 minutes."""
+    async def for_sign_in(self, auth_user_id: UUID, email: str) -> User | None:
+        """The user for a Supabase account, linking a row an admin added by email on its first sign-in. None
+        for an account nobody added: Supabase sign-in is shared with Lead Intel, so having an account there
+        isn't enough to get in here. The last-active time moves at most every 5 minutes."""
         user = await self.session.scalar(select(User).where(User.auth_user_id == auth_user_id))
         if user is None:
             user = await self.by_email(email)
-            if user is not None and user.auth_user_id is None:
-                user.auth_user_id = auth_user_id
-            elif user is None:
-                user = User(auth_user_id=auth_user_id, email=email, name=email.split("@")[0], role="sales", status="active")
-                self.session.add(user)
+            if user is None or user.auth_user_id is not None:
+                return None
+            user.auth_user_id = auth_user_id
         now = datetime.now(UTC)
         if user.status == "invited":
             user.status = "active"
