@@ -217,7 +217,7 @@ def format_rated(examples: list[Example], rating: str) -> str:
 
 
 def format_samples(samples: list[Sample]) -> str:
-    """The {{examples.samples}} block: example emails in the voice to write in."""
+    """The {{examples.samples}} block: our team's example emails (templates), each with its note."""
     if not samples:
         return "(no example emails yet)"
     blocks = []
@@ -225,7 +225,7 @@ def format_samples(samples: list[Sample]) -> str:
         lines = [f"Subject: {s.subject}"] if s.subject.strip() else []
         lines.append(s.body.strip()[:EXAMPLE_CHARS])
         if s.note.strip():
-            lines.append(f"Why it's a good example: {s.note.strip()}")
+            lines.append(f"Note from our team (when to use it, how to fill it): {s.note.strip()}")
         blocks.append("<example_email>\n" + "\n".join(lines) + "\n</example_email>")
     return "\n\n".join(blocks)
 
