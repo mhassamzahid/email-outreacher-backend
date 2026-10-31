@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
     Company, CompanyPage, Email, EmailFeedback, ExampleEmail, IcpCampaign, IcpProfile, Product, Settings, Insight, Lead, Post, Prompt, PromptVersion, ProviderCall, Stakeholder,
-    Exclusion, Job, User, Workspace, WorkspaceCompany, WorkspaceMember, FALLBACK_2, FALLBACK_3,
+    Exclusion, Job, SendEvent, User, Workspace, WorkspaceCompany, WorkspaceMember, FALLBACK_2, FALLBACK_3,
 )  # fmt: skip
 from services.apify import Employee, FetchedPost
 from services.cost_estimate import DEFAULT_ESTIMATE, upgrade as upgrade_estimate
@@ -543,6 +543,39 @@ class SendingRepo:
         self.session.add(row)
         await self.session.commit()
         return row
+
+    async def first_email_for(self, campaign_id: str | None, lead_id: str | None = None, address: str | None = None) -> Email | None:
+        """The first email a CheapSequencer lead was queued with: by its CheapSequencer lead id (known after the
+        first follow-up check), or else by its address, in that campaign."""
+        query = select(Email).where(Email.step == 1, Email.sequencer_campaign_id.is_not(None))
+        if campaign_id:
+            query = query.where(Email.sequencer_campaign_id == campaign_id)
+        if address:
+            query = query.join(Lead, Lead.id == Email.lead_id).where(func.lower(Lead.email) == address.lower())
+        elif lead_id:
+            query = query.where(Email.sequencer_lead_id == lead_id)
+        else:
+            return None
+        return await self.session.scalar(query.order_by(Email.queued_at.desc().nulls_last()).limit(1))
+
+    async def record_stop(self, email: Email, stop: Any, payload: dict[str, Any]) -> bool:
+        """Store a webhook's stop once (by its event id) and stop the lead's sequence here. False if it was
+        already stored: CheapSequencer delivers at least once."""
+        statement = (
+            insert(SendEvent)
+            .values(
+                workspace_id=email.workspace_id, email_id=email.id, lead_id=email.lead_id, type=stop.type,
+                provider_event_id=stop.event_id, payload=payload, occurred_at=stop.occurred_at,
+            )
+            .on_conflict_do_nothing(index_elements=[SendEvent.provider_event_id])
+            .returning(SendEvent.id)
+        )  # fmt: skip
+        added = await self.session.scalar(statement) is not None
+        if added:
+            email.sequence_stop_reason = email.sequence_stop_reason or stop.type
+            email.sequencer_lead_id = email.sequencer_lead_id or stop.lead_id
+        await self.session.commit()
+        return added
 
     async def hooks(self, lead_id: UUID) -> list[Insight]:
         query = select(Insight).where(Insight.lead_id == lead_id).order_by(Insight.rank)

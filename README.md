@@ -95,6 +95,7 @@ Admins open every workspace and manage users and workspaces; Management and admi
 | GET | `/api/v1/sending/outbox` | Every queued lead with the mailbox all three emails go out from, each email's text and whether it was sent, and where the sequence stands (queued, sending, replied, bounced, finished...). From Coldbrew's records as of the last follow-up check |
 | GET | `/api/v1/sending/replies` | Conversations in Coldbrew's campaigns where the lead wrote back, from CheapSequencer's unified inbox. Read-only |
 | GET | `/api/v1/sending/replies/{threadId}` | One conversation with every message, oldest first |
+| POST | `/api/v1/webhooks/cheapsequencer` | CheapSequencer's reply, bounce and unsubscribe events. No sign-in: checked by signature (see Reply webhooks) |
 | GET | `/api/v1/me` | The signed-in person: role, status and workspaces |
 | GET/POST | `/api/v1/users` | Admins: everyone; add someone by email with a role and workspaces, ready for their first sign-in |
 | PATCH/DELETE | `/api/v1/users/{id}` | Admins: change role, status or workspaces; remove from this app (their Supabase account stays). The last active admin can't be lost |
@@ -193,17 +194,35 @@ tests/
 
 ## Deploy (Railway)
 
-`railway.json` sets the start command and the `/health` healthcheck. Set the variables from
-`.env.example` on the Railway service, including `AUTHORIZED_URLS` with the Vercel URL and `API_SECRET`
-(the same value as the frontend's).
+Four services in one Railway project. The three Coldbrew ones are deployed from this repo; each takes its
+start command from its own config file (service → Settings → Config-as-code → path). `.python-version`
+pins Python 3.15.
 
-Background work needs three more pieces in the same Railway project, all from this repo and sharing the
-API's variables:
+| Service | Config file | Start command | Instances |
+| --- | --- | --- | --- |
+| API | `railway.json` | `uvicorn main:app --host 0.0.0.0 --port $PORT`, healthcheck `/health` | 1 or more |
+| Worker | `railway.worker.json` | `celery -A celery_app worker --loglevel=info --concurrency=2` | 1 or more |
+| Beat | `railway.beat.json` | `celery -A celery_app beat --loglevel=info` | exactly 1 |
+| Redis | Railway's Redis database | | 1 |
 
-| Service | Start command | Instances |
-| --- | --- | --- |
-| Redis | Railway's Redis database; reference its `REDIS_URL` in the services below | 1 |
-| Worker | `celery -A celery_app worker --loglevel=info --concurrency=2` | 1 or more |
-| Beat | `celery -A celery_app beat --loglevel=info` | exactly 1 |
+All three Coldbrew services need the same variables (`.env.example`), with `REDIS_URL` referencing the Redis
+service (`${{Redis.REDIS_URL}}`). Set `ENVIRONMENT=production`, `AUTHORIZED_URLS` to the frontend's Vercel
+URL, and `API_SECRET` to the frontend's `API_SECRET`. The database already has every table; run
+`alembic upgrade head` only when a release adds a migration. Only the API gets a public domain.
 
-Neither the worker nor beat serves HTTP, so turn the healthcheck off for them.
+### Reply webhooks (CheapSequencer)
+
+`POST /api/v1/webhooks/cheapsequencer` takes CheapSequencer's `message.replied`, `message.bounced` and
+`enrollment.stopped` events, so a reply stops that lead's follow-ups at once instead of at the next
+30-minute check. It needs no sign-in: each delivery's `X-CheapSequencer-Signature` (an HMAC of the raw body
+with the subscription's secret, at most 5 minutes old) is checked, anything unsigned is answered and
+ignored, and each event is stored once in `eo_send_events` by its id. Replies, bounces and stops still get
+picked up by the follow-up check too, so a missed delivery loses nothing.
+
+Once the API is live:
+
+1. Give the CheapSequencer API key the `webhooks:write` and `leads:read` scopes.
+2. `python scripts/subscribe_webhook.py https://<api domain>` (locally, with `CHEAPSEQUENCER_API_KEY` set).
+   CheapSequencer calls the address to check it, then the script prints the signing secret once.
+3. Set it as `CHEAPSEQUENCER_WEBHOOK_SECRET` on the API service. Until it's set, deliveries are accepted and
+   ignored. `python scripts/subscribe_webhook.py --list` shows what's subscribed.

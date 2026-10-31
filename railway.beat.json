@@ -1,0 +1,8 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "deploy": {
+    "startCommand": "celery -A celery_app beat --loglevel=info --schedule /tmp/celerybeat-schedule",
+    "restartPolicyType": "ON_FAILURE",
+    "numReplicas": 1
+  }
+}

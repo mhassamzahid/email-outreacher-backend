@@ -8,16 +8,18 @@ from response_cache import ResponseCache
 from dependencies import get_current_user, refuse_inline, require_api_secret
 from routers import (
     companies, emails, examples, exclusions, health, icps, improve, jobs, leads, mailboxes, pipeline, posts, products, prompts,
-    sending, settings, sources, stakeholders, usage, users, workspaces,
+    sending, settings, sources, stakeholders, usage, users, webhooks, workspaces,
 )  # fmt: skip
 
 
-# Every feature router is included here, under /api/v1. Only health is open. The rest need, in order,
+# Every feature router is included here, under /api/v1. Only health and the webhooks are open. The rest need, in order,
 # the shared API secret from the frontend's server and an allowed origin (dependencies.require_api_secret),
 # then a signed-in Supabase session (dependencies.get_current_user). Long-running endpoints only run as
 # background jobs (background.py, dependencies.refuse_inline).
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
+# CheapSequencer's webhooks can't sign in: each delivery is checked against its signature instead (routers/webhooks.py).
+api_router.include_router(webhooks.router)
 protected = APIRouter(dependencies=[Depends(require_api_secret), Depends(get_current_user), Depends(refuse_inline)])
 protected.include_router(users.router)
 protected.include_router(icps.router)

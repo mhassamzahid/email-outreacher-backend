@@ -421,7 +421,8 @@ async def run_follow_ups(deps: Deps, now: datetime | None = None) -> FollowUpRun
             email.sequencer_inbox_id = inbox_id
             email.sequencer_inbox_email = mailboxes.get(inbox_id) or email.sequencer_inbox_email
         email.sequence_status, email.sequence_sent_count = p.status, p.sent
-        email.sequence_last_sent_at, email.sequence_stop_reason = p.last_sent_at, p.stop_reason
+        # A stop a webhook already recorded (services/webhooks.py) stays, even before CheapSequencer's enrollment shows it.
+        email.sequence_last_sent_at, email.sequence_stop_reason = p.last_sent_at, p.stop_reason or email.sequence_stop_reason
         email.sequence_synced_at, email.sequence_raw = now, row
         if p.sent >= 1 and email.status == "queued":
             email.status, email.sent_at = "sent", email.sent_at or p.last_sent_at
@@ -429,7 +430,7 @@ async def run_follow_ups(deps: Deps, now: datetime | None = None) -> FollowUpRun
             later = existing.get((lead.id, step))
             if later is not None and p.sent >= step and later.status == "queued":
                 later.status, later.sent_at = "sent", p.last_sent_at
-        if p.status in ENDED or p.stop_reason:
+        if p.status in ENDED or email.sequence_stop_reason:
             run.ended += 1
             continue
         step = due_follow_up(p, delays.get(email.sequencer_campaign_id, DEFAULT_DELAYS), now, lead_hours)
