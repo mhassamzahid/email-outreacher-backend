@@ -194,18 +194,23 @@ tests/
 
 ## Deploy (Railway)
 
-Four services in one Railway project. The three Coldbrew ones are deployed from this repo; each takes its
+Three services in one Railway project. The two Coldbrew ones are deployed from this repo; each takes its
 start command from its own config file (service → Settings → Config-as-code → path). `.python-version`
 pins Python 3.15.
 
 | Service | Config file | Start command | Instances |
 | --- | --- | --- | --- |
 | API | `railway.json` | `uvicorn main:app --host 0.0.0.0 --port $PORT`, healthcheck `/health` | 1 or more |
-| Worker | `railway.worker.json` | `celery -A celery_app worker --loglevel=info --concurrency=2` | 1 or more |
-| Beat | `railway.beat.json` | `celery -A celery_app beat --loglevel=info` | exactly 1 |
+| Worker | `railway.worker.json` | `celery -A celery_app worker --beat --schedule /tmp/celerybeat-schedule --loglevel=info --concurrency=1` | exactly 1 |
 | Redis | Railway's Redis database | | 1 |
 
-All three Coldbrew services need the same variables (`.env.example`), with `REDIS_URL` referencing the Redis
+The worker runs beat inside it (`--beat`), so it must stay at one instance or every check is scheduled
+twice. It runs one job at a time, to keep memory (and the Railway bill) down: about 0.3 GB for the API and
+worker together. When people's jobs start waiting on each other, move beat to its own service
+(`celery -A celery_app beat --loglevel=info`, one instance), drop `--beat` and `--schedule` from the
+worker, and raise `--concurrency`.
+
+Both Coldbrew services need the same variables (`.env.example`), with `REDIS_URL` referencing the Redis
 service (`${{Redis.REDIS_URL}}`). Set `ENVIRONMENT=production`, `AUTHORIZED_URLS` to the frontend's Vercel
 URL, and `API_SECRET` to the frontend's `API_SECRET`. The database already has every table; run
 `alembic upgrade head` only when a release adds a migration. Only the API gets a public domain.

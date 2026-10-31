@@ -1,7 +1,8 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "startCommand": "celery -A celery_app worker --loglevel=info --concurrency=2",
-    "restartPolicyType": "ON_FAILURE"
+    "startCommand": "celery -A celery_app worker --beat --schedule /tmp/celerybeat-schedule --loglevel=info --concurrency=1",
+    "restartPolicyType": "ON_FAILURE",
+    "numReplicas": 1
   }
 }
