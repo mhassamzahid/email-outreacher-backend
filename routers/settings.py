@@ -1,5 +1,5 @@
-"""Workspace settings: how many rated emails Claude learns from, how much of a website research reads,
-and the cost estimator."""
+"""Workspace settings: the defaults, review and auto-send values, how many rated emails Claude learns from, how
+much of a website research reads, and the cost estimator. All kept in the database for the whole workspace."""
 
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -7,9 +7,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from config import get_settings
-from crud import ProviderCallRepo, SettingsRepo
-from dependencies import get_optional_apify, get_provider_call_repo, get_settings_repo, require_manager, require_workspace_id
-from schemas import ClaudePrice, CostEstimate, CostReference, FeedbackSettings, MeasuredUse, ResearchSettings
+from crud import PromptRepo, ProviderCallRepo, SettingsRepo
+from dependencies import (
+    get_optional_apify, get_prompt_repo, get_provider_call_repo, get_settings_repo, require_manager, require_workspace_id,
+)  # fmt: skip
+from schemas import (
+    ClaudePrice, CostEstimate, CostReference, FeedbackSettings, GeneralSettings, MeasuredUse, ResearchSettings, ScoringSettings,
+)  # fmt: skip
 from services.auth import CurrentUser
 from services.apify import ApifyClient, ApifyError
 from services.claude import PRICES
@@ -32,7 +36,7 @@ async def get_feedback_settings(
     return FeedbackSettings(**await settings.feedback(workspace_id))
 
 
-@router.put("/feedback", response_model=FeedbackSettings)
+@router.put("/feedback", response_model=FeedbackSettings, dependencies=[Depends(require_manager)])
 async def save_feedback_settings(
     body: FeedbackSettings,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -40,6 +44,53 @@ async def save_feedback_settings(
 ) -> FeedbackSettings:
     await _workspace(settings, workspace_id)
     return FeedbackSettings(**await settings.save_feedback(workspace_id, body.model_dump()))
+
+
+ADMINS_ONLY = "Only admins can change the monthly budget, auto-send and email scoring."
+
+
+def _general_out(values: dict) -> GeneralSettings:
+    return GeneralSettings(
+        default_model=values["default_model"], posts_per_lead=values["posts_per_lead"], max_post_age_days=values["max_post_age_days"],
+        monthly_budget_usd=values["monthly_budget_usd"],
+        scoring=ScoringSettings(prompt_id=values["scoring_prompt_id"], threshold=values["score_threshold"],
+                                auto_send=values["auto_send"], daily_auto_send_cap=values["daily_auto_send_cap"]),
+    )  # fmt: skip
+
+
+@router.get("/general", response_model=GeneralSettings)
+async def get_general_settings(
+    workspace_id: UUID = Depends(require_workspace_id), settings: SettingsRepo = Depends(get_settings_repo)
+) -> GeneralSettings:
+    await _workspace(settings, workspace_id)
+    return _general_out(await settings.general(workspace_id))
+
+
+@router.put("/general", response_model=GeneralSettings)
+async def save_general_settings(
+    body: GeneralSettings,
+    workspace_id: UUID = Depends(require_workspace_id),
+    user: CurrentUser = Depends(require_manager),
+    settings: SettingsRepo = Depends(get_settings_repo),
+    prompts: PromptRepo = Depends(get_prompt_repo),
+) -> GeneralSettings:
+    """Save them for everyone in the workspace. Management changes the model and posts; only admins change the
+    budget, auto-send and scoring."""
+    await _workspace(settings, workspace_id)
+    now = await settings.general(workspace_id)
+    values = {
+        "default_model": body.default_model, "posts_per_lead": body.posts_per_lead, "max_post_age_days": body.max_post_age_days,
+        "monthly_budget_usd": body.monthly_budget_usd, "score_threshold": body.scoring.threshold, "auto_send": body.scoring.auto_send,
+        "daily_auto_send_cap": body.scoring.daily_auto_send_cap, "scoring_prompt_id": body.scoring.prompt_id,
+    }  # fmt: skip
+    admin_fields = ("monthly_budget_usd", "score_threshold", "auto_send", "daily_auto_send_cap", "scoring_prompt_id")
+    if not user.is_admin and any(values[k] != now[k] for k in admin_fields):
+        raise HTTPException(status_code=403, detail=ADMINS_ONLY)
+    if body.scoring.prompt_id is not None:
+        prompt = await prompts.get(workspace_id, body.scoring.prompt_id)
+        if prompt is None or prompt.kind != "score":
+            raise HTTPException(status_code=422, detail="Pick one of this workspace's email scoring prompts.")
+    return _general_out(await settings.save_general(workspace_id, values))
 
 
 @router.get("/research", response_model=ResearchSettings)
@@ -50,7 +101,7 @@ async def get_research_settings(
     return ResearchSettings(**await settings.research(workspace_id))
 
 
-@router.put("/research", response_model=ResearchSettings)
+@router.put("/research", response_model=ResearchSettings, dependencies=[Depends(require_manager)])
 async def save_research_settings(
     body: ResearchSettings,
     workspace_id: UUID = Depends(require_workspace_id),

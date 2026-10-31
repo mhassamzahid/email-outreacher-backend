@@ -162,10 +162,15 @@ def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     return user
 
 
+MANAGERS_ONLY = "Only Management and admins can do that: ICPs, prompts, products, example emails and anything that spends budget."
+
+
 def require_manager(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-    """Admin or Management: for changes shared beyond one workspace, like Lead Intel's ICPs."""
+    """Admin or Management (the Roles tab's "Campaign setup"): ICPs, prompts, products, example emails, the
+    workspace's writing and research settings, and every run that spends budget. Sales reviews, approves,
+    queues and adds leads."""
     if user.role not in ("admin", "management"):
-        raise HTTPException(status_code=403, detail="Only Management and admins can change ICPs.")
+        raise HTTPException(status_code=403, detail=MANAGERS_ONLY)
     return user
 
 

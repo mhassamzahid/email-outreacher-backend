@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from crud import ExclusionRepo, LeadRepo, exclusion_note, person_keys
-from dependencies import get_exclusion_repo, get_lead_intel_repo, get_lead_repo, require_workspace_id
+from dependencies import get_exclusion_repo, get_lead_intel_repo, get_lead_repo, require_manager, require_workspace_id
 from lead_intel import LeadIntelRepo
 from schemas import ColumnMapping, ImportResult, LeadIdsIn, LeadIn, LeadMoveIn, LeadOut, LeadsChanged, Page, RowOutcome
 from services.leads import (
@@ -62,7 +62,7 @@ async def list_leads(
     return Page[LeadOut](items=items, total=total, limit=limit, offset=offset)
 
 
-@router.post("/delete", response_model=LeadsChanged)
+@router.post("/delete", response_model=LeadsChanged, dependencies=[Depends(require_manager)])
 async def delete_leads(
     body: LeadIdsIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -72,7 +72,7 @@ async def delete_leads(
     return LeadsChanged(changed=await leads.delete_many(workspace_id, list(dict.fromkeys(body.lead_ids))))
 
 
-@router.post("/move", response_model=LeadsChanged)
+@router.post("/move", response_model=LeadsChanged, dependencies=[Depends(require_manager)])
 async def move_leads(
     body: LeadMoveIn,
     workspace_id: UUID = Depends(require_workspace_id),

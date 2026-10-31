@@ -17,6 +17,7 @@ from dependencies import (
     get_prompt_repo,
     get_provider_call_repo,
     get_settings_repo,
+    require_manager,
     require_workspace_id,
 )
 from schemas import SuggestIn, SuggestOut
@@ -29,7 +30,7 @@ router = APIRouter(prefix="/improve", tags=["improve"])
 MIN_RATED = 3
 
 
-@router.post("/email-prompt", response_model=SuggestOut)
+@router.post("/email-prompt", response_model=SuggestOut, dependencies=[Depends(require_manager)])
 async def suggest_email_prompt(
     body: SuggestIn,
     workspace_id: UUID = Depends(require_workspace_id),

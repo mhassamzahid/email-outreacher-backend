@@ -138,7 +138,7 @@ async def get_icp(
     return Icp.model_validate({**row, "profile": by_id.get(icp_id)})
 
 
-@router.put("/{icp_id}/profile", response_model=IcpProfileOut)
+@router.put("/{icp_id}/profile", response_model=IcpProfileOut, dependencies=[Depends(require_manager)])
 async def save_icp_profile(
     icp_id: UUID,
     body: IcpProfileIn,

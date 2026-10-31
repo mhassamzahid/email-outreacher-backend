@@ -37,6 +37,7 @@ from dependencies import (
     get_provider_call_repo,
     get_settings_repo,
     get_website_reader,
+    require_manager,
     require_workspace_id,
 )
 from lead_intel import LeadIntelRepo
@@ -202,7 +203,7 @@ def has_offer(profile: Any, product: Any) -> bool:
     return product is not None or bool(profile and (profile.offer or "").strip())
 
 
-@router.post("/generate", response_model=GenerateResult)
+@router.post("/generate", response_model=GenerateResult, dependencies=[Depends(require_manager)])
 async def generate(
     body: GenerateIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -228,8 +229,8 @@ async def generate(
     is_excluded = await exclusions.matcher()
     outcomes: dict[UUID, GenerateOutcome] = {}
     jobs: list[tuple[Lead, LeadContext, PromptVersionSpec, PromptVersionSpec, PromptVersionSpec | None]] = []
-    # Email scoring isn't chosen per ICP: every draft is scored with the workspace's default.
-    score_version = await prompts.for_icp(workspace_id, "score", None)
+    # Email scoring isn't chosen per ICP: every draft is scored with the prompt picked in Settings, else the default.
+    score_version = await prompts.for_icp(workspace_id, "score", (await settings.general(workspace_id))["scoring_prompt_id"])
     score_spec = _spec(score_version) if score_version else None
     icps: dict[UUID, dict[str, Any] | None] = {}
     rated: dict[UUID, list] = {}

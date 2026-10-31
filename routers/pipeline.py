@@ -33,6 +33,7 @@ from dependencies import (
     get_settings_repo,
     get_stakeholder_repo,
     get_website_reader,
+    require_manager,
     require_workspace_id,
 )
 from lead_intel import LeadIntelRepo
@@ -89,7 +90,7 @@ async def list_companies(
     return [PipelineCompanyOut.model_validate(c) for c in await companies.list(workspace_id, icp_id, status)]
 
 
-@router.post("/find", response_model=FindCompaniesResult)
+@router.post("/find", response_model=FindCompaniesResult, dependencies=[Depends(require_manager)])
 async def find_companies(
     body: FindCompaniesIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -239,7 +240,7 @@ async def _find_on_google_maps(
     )
 
 
-@router.post("/research", response_model=ResearchResult)
+@router.post("/research", response_model=ResearchResult, dependencies=[Depends(require_manager)])
 async def research(
     body: ResearchIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -340,7 +341,7 @@ async def company_content(
     )
 
 
-@router.patch("/companies/{company_id}", response_model=PipelineCompanyOut)
+@router.patch("/companies/{company_id}", response_model=PipelineCompanyOut, dependencies=[Depends(require_manager)])
 async def set_status(
     company_id: UUID,
     body: CompanyStatusIn,
@@ -358,7 +359,7 @@ async def set_status(
     return PipelineCompanyOut.model_validate(company)
 
 
-@router.post("/stakeholders", response_model=StakeholderSearchResult)
+@router.post("/stakeholders", response_model=StakeholderSearchResult, dependencies=[Depends(require_manager)])
 async def find_stakeholders(
     body: PipelineStakeholdersIn,
     workspace_id: UUID = Depends(require_workspace_id),

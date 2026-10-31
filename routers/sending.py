@@ -111,7 +111,7 @@ async def queue(body: QueueIn, deps: outreach.Deps = Depends(_deps)) -> QueueOut
     )
 
 
-@router.post("/follow-ups/run", response_model=FollowUpRunOut)
+@router.post("/follow-ups/run", response_model=FollowUpRunOut, dependencies=[Depends(require_manager)])
 async def run_follow_ups(deps: outreach.Deps = Depends(_deps)) -> FollowUpRunOut:
     """Check every lead's place in its campaign now and write the follow-ups that are nearly due.
     This also runs on its own every 30 minutes."""

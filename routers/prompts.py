@@ -10,7 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from crud import PromptRepo
-from dependencies import get_prompt_repo, require_workspace_id
+from dependencies import get_prompt_repo, require_manager, require_workspace_id
 from services.output_schemas import output_schemas
 from schemas import (
     NewVersionIn,
@@ -58,7 +58,7 @@ async def list_prompts(
     )
 
 
-@router.post("", response_model=PromptWithVersion, status_code=201)
+@router.post("", response_model=PromptWithVersion, status_code=201, dependencies=[Depends(require_manager)])
 async def create_prompt(
     body: PromptCreateIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -71,7 +71,7 @@ async def create_prompt(
     return PromptWithVersion(prompt=PromptOut.model_validate(prompt), version=PromptVersionOut.model_validate(version))
 
 
-@router.post("/{prompt_id}/versions", response_model=PromptVersionOut, status_code=201)
+@router.post("/{prompt_id}/versions", response_model=PromptVersionOut, status_code=201, dependencies=[Depends(require_manager)])
 async def save_version(
     prompt_id: UUID,
     body: NewVersionIn,
@@ -84,7 +84,7 @@ async def save_version(
     return PromptVersionOut.model_validate(version)
 
 
-@router.patch("/{prompt_id}", response_model=PromptOut)
+@router.patch("/{prompt_id}", response_model=PromptOut, dependencies=[Depends(require_manager)])
 async def update_prompt(
     prompt_id: UUID,
     body: PromptUpdateIn,
@@ -100,7 +100,7 @@ async def update_prompt(
     return PromptOut.model_validate(prompt)
 
 
-@router.delete("/{prompt_id}", status_code=204)
+@router.delete("/{prompt_id}", status_code=204, dependencies=[Depends(require_manager)])
 async def delete_prompt(
     prompt_id: UUID,
     workspace_id: UUID = Depends(require_workspace_id),

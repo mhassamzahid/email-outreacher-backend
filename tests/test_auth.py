@@ -243,7 +243,7 @@ def test_only_admins_change_workspaces_and_management_changes_icps(signed) -> No
     assert signed.client.post("/api/v1/workspaces", headers=as_(sales), json={"name": "Mine"}).status_code == 403
     assert signed.client.put(f"/api/v1/workspaces/{WORKSPACE_ID}/members", headers=as_(sales), json={"userIds": []}).status_code == 403
     icp = {"name": "X", "industry": "Y"}
-    assert signed.client.post("/api/v1/icps", headers=as_(sales), json=icp).json()["detail"] == "Only Management and admins can change ICPs."
+    assert signed.client.post("/api/v1/icps", headers=as_(sales), json=icp).json()["detail"].startswith("Only Management and admins can do that")
 
 
 def test_current_user_can_open() -> None:

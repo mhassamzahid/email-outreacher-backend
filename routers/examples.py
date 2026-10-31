@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from crud import EmailRepo, ExampleRepo, FeedbackRepo
-from dependencies import get_email_repo, get_example_repo, get_feedback_repo, require_workspace_id
+from dependencies import get_email_repo, get_example_repo, get_feedback_repo, require_manager, require_workspace_id
 from schemas import ExampleEmailIn, ExampleEmailOut, SaveAsExampleIn
 
 router = APIRouter(prefix="/examples", tags=["examples"])
@@ -37,7 +37,7 @@ async def list_examples(
     return [ExampleEmailOut.model_validate(e) for e in await examples.list(workspace_id)]
 
 
-@router.post("", response_model=ExampleEmailOut, status_code=201)
+@router.post("", response_model=ExampleEmailOut, status_code=201, dependencies=[Depends(require_manager)])
 async def create_example(
     body: ExampleEmailIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -48,7 +48,7 @@ async def create_example(
     return ExampleEmailOut.model_validate(await examples.create(workspace_id, {**_clean(body), "source": "manual"}))
 
 
-@router.put("/{example_id}", response_model=ExampleEmailOut)
+@router.put("/{example_id}", response_model=ExampleEmailOut, dependencies=[Depends(require_manager)])
 async def update_example(
     example_id: UUID,
     body: ExampleEmailIn,
@@ -59,7 +59,7 @@ async def update_example(
     return ExampleEmailOut.model_validate(await examples.update(row, _clean(body)))
 
 
-@router.delete("/{example_id}", status_code=204)
+@router.delete("/{example_id}", status_code=204, dependencies=[Depends(require_manager)])
 async def delete_example(
     example_id: UUID,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -69,7 +69,7 @@ async def delete_example(
     return Response(status_code=204)
 
 
-@router.post("/from-email/{email_id}", response_model=ExampleEmailOut, status_code=201)
+@router.post("/from-email/{email_id}", response_model=ExampleEmailOut, status_code=201, dependencies=[Depends(require_manager)])
 async def save_email_as_example(
     email_id: UUID,
     body: SaveAsExampleIn,

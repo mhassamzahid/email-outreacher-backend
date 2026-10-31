@@ -1168,6 +1168,26 @@ class FeedbackSettings(ApiModel):
     improve_examples: int = Field(ge=3, le=50)
 
 
+class ScoringSettings(ApiModel):
+    # The email scoring prompt; null uses the workspace's default scoring prompt.
+    prompt_id: UUID | None = None
+    # Emails scoring at or above this may go out on their own once auto-send is on.
+    threshold: int = Field(ge=0, le=100)
+    auto_send: bool
+    daily_auto_send_cap: int = Field(ge=0, le=10000)
+
+
+class GeneralSettings(ApiModel):
+    """The Settings page's defaults and review settings, kept for the whole workspace. The budget and scoring are
+    the admins' (the Roles tab's "Administration"); the rest is Management's."""
+
+    default_model: str = Field(pattern=r"^claude-[a-z0-9.-]+$", max_length=60)
+    posts_per_lead: int = Field(ge=1, le=20)
+    max_post_age_days: int = Field(ge=1, le=365)
+    monthly_budget_usd: float = Field(ge=0, le=1_000_000)
+    scoring: ScoringSettings
+
+
 class ResearchSettings(ApiModel):
     """How much of a company's website research reads while Claude chooses each next page."""
 

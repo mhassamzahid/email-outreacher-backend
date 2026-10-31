@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 
 from crud import PostRepo, ProviderCallRepo
-from dependencies import get_apify, get_lead_intel_repo, get_post_repo, get_provider_call_repo, require_workspace_id
+from dependencies import get_apify, get_lead_intel_repo, get_post_repo, get_provider_call_repo, require_manager, require_workspace_id
 from lead_intel import LeadIntelRepo
 from schemas import LeadPostsResult, PostFetchIn, PostFetchResult, PostOut
 from services.apify import (
@@ -52,7 +52,7 @@ def _group(found: list[FetchedPost], keys: dict[UUID, str]) -> dict[UUID, list[F
     return by_lead
 
 
-@router.post("/fetch", response_model=PostFetchResult)
+@router.post("/fetch", response_model=PostFetchResult, dependencies=[Depends(require_manager)])
 async def fetch_posts(
     body: PostFetchIn,
     workspace_id: UUID = Depends(require_workspace_id),

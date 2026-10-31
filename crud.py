@@ -1497,6 +1497,11 @@ class FeedbackRepo:
 
 FEEDBACK_DEFAULTS = {"sample_examples": 3, "good_examples": 3, "bad_examples": 3, "improve_examples": 20}
 RESEARCH_DEFAULTS = {"research_max_pages": 6, "research_max_seconds": 120}
+# The Settings page's review, auto-send and default values, shared by everyone in the workspace.
+GENERAL_DEFAULTS: dict[str, Any] = {
+    "default_model": "claude-haiku-5-5", "posts_per_lead": 5, "max_post_age_days": 60, "monthly_budget_usd": 150,
+    "score_threshold": 80, "auto_send": False, "daily_auto_send_cap": 50, "scoring_prompt_id": None,
+}  # fmt: skip
 SENDING_DEFAULTS: dict[str, Any] = {
     "sender_company": "", "sender_address": "", "followup_fallback_2": FALLBACK_2, "followup_fallback_3": FALLBACK_3,
     "followup_lead_hours": 24,
@@ -1551,6 +1556,19 @@ class SettingsRepo:
     async def save_cost_estimate(self, workspace_id: UUID, estimate: dict[str, Any]) -> dict[str, Any]:
         await self._save(workspace_id, {"cost_estimate": estimate})
         return await self.cost_estimate(workspace_id)
+
+    async def general(self, workspace_id: UUID) -> dict[str, Any]:
+        """The review, auto-send and default values. A model that isn't Claude (the column's old default) reads as
+        the default one."""
+        values = await self._get(workspace_id, GENERAL_DEFAULTS)
+        if not str(values["default_model"] or "").startswith("claude-"):
+            values["default_model"] = GENERAL_DEFAULTS["default_model"]
+        values["monthly_budget_usd"] = float(values["monthly_budget_usd"])
+        return values
+
+    async def save_general(self, workspace_id: UUID, values: dict[str, Any]) -> dict[str, Any]:
+        await self._save(workspace_id, values)
+        return await self.general(workspace_id)
 
     async def research(self, workspace_id: UUID) -> dict[str, int]:
         """How much of a company's website research may read."""

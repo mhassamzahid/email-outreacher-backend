@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from crud import WorkspaceCompanyRepo
-from dependencies import get_lead_intel_repo, get_workspace_company_repo, get_workspace_id, require_workspace_id
+from dependencies import get_lead_intel_repo, get_workspace_company_repo, get_workspace_id, require_manager, require_workspace_id
 from lead_intel import LeadIntelRepo
 from schemas import (
     Company,
@@ -93,7 +93,7 @@ async def list_icp_companies(
     return await list_companies(icp_id, False, None, q, limit, offset, workspace_id, lead_intel, workspace_companies)
 
 
-@router.post("/companies/import", response_model=CompanyImportResult)
+@router.post("/companies/import", response_model=CompanyImportResult, dependencies=[Depends(require_manager)])
 async def import_companies(
     body: CompanyImportIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -115,7 +115,7 @@ async def import_companies(
     return CompanyImportResult(imported=added, already_in_workspace=len(valid) - added, not_found=not_found)
 
 
-@router.post("/companies/remove", response_model=CompanyRemoveResult)
+@router.post("/companies/remove", response_model=CompanyRemoveResult, dependencies=[Depends(require_manager)])
 async def remove_companies(
     body: CompanyRemoveIn,
     workspace_id: UUID = Depends(require_workspace_id),

@@ -47,6 +47,11 @@ LONG_RUNNING: dict[str, str] = {
 }
 
 
+# The background jobs Sales may start: sending approved emails (the Roles tab's "Send approved emails"). Every
+# other one spends budget or changes the campaign setup, so it's for Management and admins.
+SALES_JOBS = {"/sending/queue"}
+
+
 @dataclass(frozen=True)
 class JobContext:
     job_id: UUID

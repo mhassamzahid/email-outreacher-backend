@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from crud import ProductRepo
-from dependencies import get_product_repo, require_workspace_id
+from dependencies import get_product_repo, require_manager, require_workspace_id
 from schemas import ProductIn, ProductOut
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -34,7 +34,7 @@ async def list_products(
     return [await _out(products, workspace_id, p) for p in await products.list(workspace_id)]
 
 
-@router.post("", response_model=ProductOut, status_code=201)
+@router.post("", response_model=ProductOut, status_code=201, dependencies=[Depends(require_manager)])
 async def create_product(
     body: ProductIn, workspace_id: UUID = Depends(require_workspace_id), products: ProductRepo = Depends(get_product_repo)
 ) -> ProductOut:
@@ -48,7 +48,7 @@ async def create_product(
     return await _out(products, workspace_id, await products.create(workspace_id, values))
 
 
-@router.put("/{product_id}", response_model=ProductOut)
+@router.put("/{product_id}", response_model=ProductOut, dependencies=[Depends(require_manager)])
 async def update_product(
     product_id: UUID,
     body: ProductIn,
@@ -64,7 +64,7 @@ async def update_product(
     return await _out(products, workspace_id, await products.update(product, values))
 
 
-@router.delete("/{product_id}", status_code=204)
+@router.delete("/{product_id}", status_code=204, dependencies=[Depends(require_manager)])
 async def delete_product(
     product_id: UUID, workspace_id: UUID = Depends(require_workspace_id), products: ProductRepo = Depends(get_product_repo)
 ) -> Response:

@@ -23,6 +23,7 @@ from dependencies import (
     get_provider_call_repo,
     get_stakeholder_repo,
     get_workspace_company_repo,
+    require_manager,
     require_workspace_id,
 )
 from lead_intel import LeadIntelRepo
@@ -205,7 +206,7 @@ async def list_stakeholders(
     return [StakeholderOut.model_validate(s) for s in await stakeholders.list(workspace_id, company_id, icp_id)]
 
 
-@router.post("/search-linkedin", response_model=StakeholderSearchResult)
+@router.post("/search-linkedin", response_model=StakeholderSearchResult, dependencies=[Depends(require_manager)])
 async def search_linkedin(
     body: LinkedInSearchIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -307,7 +308,7 @@ async def add_as_leads(
     return AddAsLeadsResult(added=added, linked_existing=linked, skipped=skipped)
 
 
-@router.post("/search-icp", response_model=IcpSearchResult)
+@router.post("/search-icp", response_model=IcpSearchResult, dependencies=[Depends(require_manager)])
 async def search_by_icp(
     body: IcpSearchIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -360,7 +361,7 @@ def _is_range(value: str) -> bool:
     return len(parts) == 2 and all(p.strip().isdigit() for p in parts) and int(parts[0]) <= int(parts[1])
 
 
-@router.post("/search", response_model=StakeholderSearchResult)
+@router.post("/search", response_model=StakeholderSearchResult, dependencies=[Depends(require_manager)])
 async def search(
     body: StakeholderSearchIn,
     workspace_id: UUID = Depends(require_workspace_id),
@@ -418,7 +419,7 @@ async def search(
     return StakeholderSearchResult(results=results, error=error)
 
 
-@router.post("/reveal", response_model=StakeholderRevealResult)
+@router.post("/reveal", response_model=StakeholderRevealResult, dependencies=[Depends(require_manager)])
 async def reveal(
     body: StakeholderRevealIn,
     workspace_id: UUID = Depends(require_workspace_id),

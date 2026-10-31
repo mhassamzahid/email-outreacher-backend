@@ -7,10 +7,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 import response_cache
-from background import LONG_RUNNING
+from background import LONG_RUNNING, SALES_JOBS
 from config import get_settings
 from crud import JobRepo
-from dependencies import get_current_user, get_job_queue, get_job_repo, require_workspace_id
+from dependencies import MANAGERS_ONLY, get_current_user, get_job_queue, get_job_repo, require_workspace_id
 from models import Job
 from schemas import JobIn, JobOut
 from services.auth import CurrentUser
@@ -54,6 +54,9 @@ async def start_job(
     label = LONG_RUNNING.get(body.path)
     if label is None:
         raise HTTPException(status_code=422, detail="That doesn't run as a background job.")
+    # Refused here, before it's queued (the endpoint checks again when the worker runs it as this person).
+    if body.path not in SALES_JOBS and user.role not in ("admin", "management"):
+        raise HTTPException(status_code=403, detail=MANAGERS_ONLY)
     job = await jobs.create(workspace_id, user.id, body.path, label, {"path": body.path, "body": body.body})
     try:
         queue(job.id)
