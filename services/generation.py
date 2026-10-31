@@ -114,6 +114,8 @@ class Item:
     posted_at: datetime | None
     text: str
     url: str
+    # Someone else's post they reposted: who wrote it ("Martin Gould, Personal Injury Attorney"). Empty for their own.
+    reposted_from: str = ""
 
 
 @dataclass
@@ -182,7 +184,10 @@ def format_items(items: list[Item], only: Callable[[Item], bool] | None = None) 
     lines = []
     for i, it in rows:
         date = it.posted_at.date().isoformat() if it.posted_at else "undated"
-        who = "their own post" if it.whose == "person" else "their company's post"
+        if it.reposted_from:
+            who = f"they reposted this post by {it.reposted_from}; not their words"
+        else:
+            who = "their own post" if it.whose == "person" else "their company's post"
         text = " ".join(it.text.split())[:ITEM_CHARS] or "(no text)"
         lines.append(f"{i}. [{it.source}, {date}, {who}] {text}")
     return "\n".join(lines)

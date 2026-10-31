@@ -20,10 +20,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from crud import (
-    PRODUCT_FIELDS, EmailRepo, ExampleRepo, ExclusionRepo, FeedbackRepo, IcpProfileRepo, ProductRepo, PromptRepo,
+    PRODUCT_FIELDS, CompanyRepo, EmailRepo, ExampleRepo, ExclusionRepo, FeedbackRepo, IcpProfileRepo, ProductRepo, PromptRepo,
     ProviderCallRepo, SettingsRepo, exclusion_note, person_keys,
 )  # fmt: skip
 from dependencies import (
+    get_company_repo,
     get_email_repo,
     get_example_repo,
     get_exclusion_repo,
@@ -35,6 +36,7 @@ from dependencies import (
     get_prompt_repo,
     get_provider_call_repo,
     get_settings_repo,
+    get_website_reader,
     require_workspace_id,
 )
 from lead_intel import LeadIntelRepo
@@ -57,6 +59,7 @@ from services.claude import cost_usd
 from services.prompts import company_variables
 from services.research import _apollo_facts as apollo_facts
 from services.generation import EmailWriter, Example, Item, LeadContext, PromptVersionSpec, Sample
+from services.website import WebsiteReader
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
@@ -76,9 +79,30 @@ def _text(value: Any) -> str:
     return ""
 
 
-def _person(lead: Lead, person: Stakeholder | None, company: Company | None) -> dict[str, Any]:
+def reposted_from(post: Any) -> str:
+    """Who wrote a post they only reposted ("Martin Gould, Personal Injury Attorney"), or "" for their own."""
+    raw = post.raw or {}
+    header = ((raw.get("header") or {}).get("text") or "").lower()
+    if not (post.is_repost or raw.get("repostedBy") or "reposted" in header):
+        return ""
+    author = raw.get("author") or {}
+    name, info = _text(author.get("name")), _text(author.get("info"))
+    return ", ".join(x for x in (name, info[:100]) if x) or "someone else"
+
+
+def _own_headline(posts: list[Any]) -> str:
+    """Their LinkedIn headline, as their own posts show it under their name (free: it comes with the posts)."""
+    for post in posts:
+        if post.lead_id and post.source == "linkedin" and not reposted_from(post):
+            info = _text(((post.raw or {}).get("author") or {}).get("info"))
+            if info:
+                return info
+    return ""
+
+
+def _person(lead: Lead, person: Stakeholder | None, company: Company | None, posts: list[Any] = ()) -> dict[str, Any]:
     """Everything known about the person for the {{lead.*}} placeholders: the lead, plus the record
-    they were found or added as (Apollo, LinkedIn or by hand)."""
+    they were found or added as (Apollo, LinkedIn or by hand), plus the headline their posts show."""
     raw = (person.raw if person else None) or {}
     location = _text(raw.get("location")) or ", ".join(
         x for x in (raw.get("city"), raw.get("state"), raw.get("country")) if isinstance(x, str) and x
@@ -91,7 +115,7 @@ def _person(lead: Lead, person: Stakeholder | None, company: Company | None) -> 
     return {
         "first_name": lead.first_name, "last_name": lead.last_name, "title": lead.title,
         "seniority": (person.seniority if person else None) or raw.get("seniority") or "",
-        "headline": _text(raw.get("headline")),
+        "headline": _text(raw.get("headline")) or _own_headline(posts),
         "location": location,
         "company": lead.company or (company.name if company else ""),
         "website": lead.website,
@@ -140,6 +164,29 @@ def _company_evidence(
     }
 
 
+WRITING_PAGES = 4  # pages read from a site nobody has read yet, when writing (homepage and the most useful few)
+
+
+def _researched_site(company: Company | None) -> bool:
+    return bool(company and ((company.research or {}).get("website") or {}).get("outcome") == "ok")
+
+
+async def _read_site(
+    workspace_id: UUID, company: Company | None, lead: Lead, reader: WebsiteReader, companies: CompanyRepo,
+    cache: dict[str, list[dict[str, str]]],
+) -> list[dict[str, str]]:  # fmt: skip
+    """Read the lead's company website for the email, keeping the pages on the company for next time."""
+    domain = (company.domain if company else None) or lead.domain or lead.website
+    if not domain:
+        return []
+    if domain not in cache:
+        site = await reader.read(domain, max_pages=WRITING_PAGES)
+        cache[domain] = [{"url": p["url"], "text": p.get("text") or ""} for p in site.pages] if site.reached else []
+        if cache[domain] and company:
+            await companies.save_pages(workspace_id, company.id, site.via or "own_crawl", site.pages)
+    return cache[domain]
+
+
 def _spec(version) -> PromptVersionSpec:
     return PromptVersionSpec(
         version.id, version.system_prompt, version.user_prompt, version.model, version.max_tokens, version.max_posts
@@ -170,6 +217,8 @@ async def generate(
     library: ExampleRepo = Depends(get_example_repo),
     writer: EmailWriter | None = Depends(get_optional_writer),
     exclusions: ExclusionRepo = Depends(get_exclusion_repo),
+    companies: CompanyRepo = Depends(get_company_repo),
+    reader: WebsiteReader = Depends(get_website_reader),
 ) -> GenerateResult:
     """Draft an email for each lead. Leads without an ICP are skipped."""
     if writer is None:
@@ -189,6 +238,7 @@ async def generate(
     samples: dict[UUID, list[Sample]] = {}
     examples_used: dict[UUID, list[UUID]] = {}
     lead_intel_fields: dict[UUID, dict[str, Any] | None] = {}
+    sites_read: dict[str, list[dict[str, str]]] = {}
 
     # Gather everything from the database first; only the Claude calls run side by side.
     contacted = await emails.in_sequence(workspace_id, ids)
@@ -235,6 +285,9 @@ async def generate(
         )
         person = await emails.person_for(workspace_id, lead)
         pages = [{"url": p.url, "text": p.text} for p in await emails.pages_for(company)] if company else []
+        if not pages and not (fields or {}).get("site_text") and not _researched_site(company):
+            # No website text yet (a Lead Intel company, say): read it now, once per site. Free.
+            pages = await _read_site(workspace_id, company, lead, reader, companies, sites_read)
         if icp_id not in rated:
             # Never the lead's own earlier draft: it's about to be replaced.
             # One extra of each, in case one is this lead's own earlier draft.
@@ -257,9 +310,10 @@ async def generate(
                 )},
                 "product": None if product is None else {k: getattr(product, k) for k in PRODUCT_FIELDS},
             },
-            lead=_person(lead, person, company),
+            lead=_person(lead, person, company, posts),
             items=[
-                Item(p.id, "person" if p.lead_id else "company", p.source, p.posted_at, p.text, p.url) for p in posts
+                Item(p.id, "person" if p.lead_id else "company", p.source, p.posted_at, p.text, p.url, reposted_from(p))
+                for p in posts
             ],
             instruction=body.instruction,
             examples=[Example(f.rating, f.subject, f.body, f.hook, list(f.tags), f.note) for f in picked],

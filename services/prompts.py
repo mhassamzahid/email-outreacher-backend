@@ -209,9 +209,9 @@ Our team's templates come first. When example emails are given, they're template
 - Fill each bracketed field ([Name], [what you found about them], [PLATFORM] and so on) from the material below, never with a guess.
 - "I watched your video about" becomes what the hook really is: "I saw your post about", "I was on your website and saw", and so on. Never say you watched a video unless the hook is a video.
 - A sentence whose bracket you can't fill truthfully is rewritten without it or dropped. With no proof given, drop the whole credibility sentence ("I'm basing this on our experience, because we've [CREDIBILITY]."), never leave half of it.
-- A template sentence that doesn't match what we offer is reworded to match it. For a free trial, "share some resources" and "a detailed PDF" become the trial itself.
+- A template sentence that doesn't match what we offer is reworded to match it, or dropped. When we offer a trial or a demo of our product, drop the "Because I wanted to share some resources... I can help you out personally" sentence entirely, and "a detailed PDF" becomes the trial itself.
 - Only offer what we actually offer, from "What we sell" and "Our angle". Prefer the template whose offer matches it (a free trial, a demo, a PDF...). Never promise a PDF, a Loom, an audit or a demo we don't offer: swap in what we do offer, keeping the template's shape.
-- Question templates (no research needed) suit people with little specific material; templates that point to something specific need that thing to be in the material.
+- Always use one of the templates when any are given, even when the material is thin: then use a question template (one that asks how they currently handle something), opening on a true detail from their company's website or posts. Templates that point to something specific need that thing to be in the material.
 
 Without example emails, use this shape, in 3 or 4 short paragraphs:
 1. Open on the hook: something specific this person posted, said or did, in their terms. For example "Saw your post about opening the second shop in Round Rock." Never open with "I hope this finds you well", "My name is", "I came across your profile" or "I'm reaching out because".
@@ -222,12 +222,24 @@ Without example emails, use this shape, in 3 or 4 short paragraphs:
 
 How it must read:
 - Human and specific. It should be obvious it was written for this one person. Use their first name once, at the start.
+- Every sentence earns its place: it says something true of this person or company, or a concrete fact about what we offer. A sentence that could go to anyone is cut or made specific.
 - Short: 60 to 130 words in the body. Short sentences and paragraphs of one to three sentences.
 - Plain and warm, like a peer. Use contractions (you're, it's, don't).
 - Never use em dashes or en dashes. Use commas, periods or parentheses instead.
 - No exclamation marks, no emojis, no bullet points, no links, no bold or headings.
 - No hype or buzzwords: never "leverage", "synergy", "game-changer", "revolutionize", "streamline", "cutting-edge", "unlock", "elevate", "seamless", "boost", "solution", "innovative", "I wanted to reach out".
 - No flattery: never "impressive", "amazing", "love what you're doing".
+
+It must not read as written by AI. Never:
+- "It's not X, it's Y", "not just X but Y", or any contrast that only adds weight.
+- Lists of three or more, anywhere ("orders, production and fulfillment", "what's paid, what's printing and what's late"). Name the one thing that matters most for this person, or two at most.
+- A closing line that restates the point, or a line that sums up what the reader just read.
+- Staged openers or asides: "Quick question", "Here's the thing", "Honestly", "Let me be direct", "Curious,".
+- Filler phrases: "I hope this finds you well", "I came across", "I noticed", "I wanted to reach out", "just checking in", "touch base", "circle back", "on your radar", "pain points", "at the end of the day", "in today's fast-paced world".
+- AI words: delve, crucial, pivotal, robust, seamless, streamline, leverage, elevate, empower, unlock, boost, game-changer, cutting-edge, landscape, navigate, journey, tailored, holistic, synergy, testament, foster, enhance.
+- Made-up empathy or certainty about their life: "I know how hard it is", "you're probably drowning in". Say what usually happens to businesses like theirs instead.
+- Repeating their post back to them at length. Name the one detail in their words, then move on.
+Write the way a busy founder writes to another: plain words, uneven sentence lengths, one idea per sentence.
 - Mention their post or detail once. Never say how you found it (no "I scraped", "my research", "an AI").
 - Never write about what you know or don't know about them, or how you got it: no "I don't know much about", "I couldn't find", "from what I can see", "I noticed you haven't posted", and no "yet" about your knowledge. Write as someone who simply knows what's given.
 - No signature or sign-off name: the sending tool adds it. End on the template's closing line, or on the question.
@@ -268,7 +280,7 @@ Where it's from: {{hook.source}} {{hook.date}}
 The post it comes from (empty if it came from the website or their profile):
 {{hook.post}}
 
-Their other recent posts, for context only (mention at most one detail, and only if it helps):
+Their recent activity, newest first. Their own posts say what they think and do; a repost only shows what caught their eye, so never treat its words as theirs. For context (mention at most one detail, and only if it helps):
 {{posts.linkedin}}
 {{posts.instagram}}
 
@@ -276,6 +288,17 @@ Their other recent posts, for context only (mention at most one detail, and only
 
 {{company.name}} ({{company.domain}}), {{company.location}}
 Why they fit: {{company.summary}}
+Company facts: {{company.apollo}}
+Their socials: {{company.socials}}
+
+Their Instagram profile:
+{{company.instagram}}
+
+The company's own recent posts:
+{{company.posts}}
+
+Their website, as read (what they sell, who for, how they work; use their words for what they do):
+{{company.website}}
 
 ## What we sell
 
@@ -325,13 +348,14 @@ You get the draft, the material it was written from, example emails in our voice
 Score from 0 to 100, adding up:
 - Up to 40: similarity to the emails rated good and to the example emails. Compare length, structure (hook, bridge, what we do, ask), tone, how personal it feels, and the kind of call to action. Similar style, not similar facts.
 - Up to 25: personalization. It opens on a specific, real detail about this person (their post, their company's news), and that detail actually comes from the material given. A generic opener scores 0 here.
-- Up to 20: rules. 60 to 120 words; no em dashes or en dashes; no exclamation marks; contractions used; one clear question at the end; no buzzwords or flattery; none of the words to avoid; no signature.
+- Up to 20: rules. 60 to 130 words; no em dashes or en dashes; no exclamation marks; contractions used; ends on the template's closing line or one clear question; no buzzwords or flattery; none of the words to avoid; no signature.
 - Up to 15: distance from the emails rated bad. Full marks if it repeats none of what the reviewer criticised.
 
 Then subtract:
 - 40 for any fact, number, result or customer not found in the material given, or proof not used word for word.
 - 30 for anything sensitive (grief, illness, politics, religion, family, money trouble).
 - 20 if it repeats a pattern the reviewer criticised in a bad example.
+- 15 if it reads as written by AI: "not X, it's Y" contrasts, lists of three for rhythm, a closing line that restates the point, filler ("I came across", "I wanted to reach out", "pain points"), AI words (delve, seamless, streamline, leverage, elevate, unlock, robust, game-changer), or a sentence that could go to anyone. Quote the phrase in the reasons.
 
 If no emails have been rated yet, judge similarity against the example emails alone and say so. If there are no example emails either, put that weight on the rules and personalization.
 
