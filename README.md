@@ -196,7 +196,7 @@ tests/
 
 Three services in one Railway project. The two Coldbrew ones are deployed from this repo; each takes its
 start command from its own config file (service → Settings → Config-as-code → path). `.python-version`
-pins Python 3.15.
+pins Python 3.14 (Railway has no prebuilt 3.15 yet; the tests pass on both).
 
 | Service | Config file | Start command | Instances |
 | --- | --- | --- | --- |
