@@ -9,6 +9,8 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -21,6 +23,7 @@ from database import get_engine, get_sessionmaker
 from lead_intel import LeadIntelRepo
 from models import Email
 from services import outreach
+from services.apify import ApifyClient, ApifyError
 from services.generation import EmailWriter
 from services.sending import SequencerClient
 
@@ -90,3 +93,37 @@ async def check_follow_ups() -> CheckSummary:
         # Pooled connections belong to this run's event loop; the next run gets a new loop.
         await get_engine().dispose()
     return summary
+
+
+# How far back Apify runs are re-read. Apify settles a run's cost within minutes; this is ample.
+SETTLE_WINDOW = timedelta(hours=6)
+
+
+async def settle_apify_costs() -> dict[str, int]:
+    """Correct the logged cost of recent Apify runs to what Apify finally charged. A run's cost is read when
+    it finishes, but some charges (a posts run's per-post and "no result" events) land a little later, so
+    the first figure can be too low. Reading a run is free. Called on a fresh event loop each time."""
+    settings = get_settings()
+    out = {"checked": 0, "corrected": 0}
+    if not settings.apify_token:
+        return out
+    apify = ApifyClient(settings.apify_token, base_url=settings.apify_api_url)
+    try:
+        async with get_sessionmaker()() as session:
+            calls = ProviderCallRepo(session)
+            for row in await calls.apify_runs_since(datetime.now(UTC) - SETTLE_WINDOW):
+                run_id = row.idempotency_key.removeprefix("apify:run:")
+                try:
+                    cost = (await apify.get(f"/actor-runs/{run_id}")).get("data", {}).get("usageTotalUsd")
+                except ApifyError as exc:
+                    log.warning("couldn't read Apify run %s: %s", run_id, exc.message)
+                    continue
+                out["checked"] += 1
+                if cost is not None and Decimal(str(round(float(cost), 4))) != row.cost_usd:
+                    row.cost_usd = Decimal(str(round(float(cost), 4)))
+                    out["corrected"] += 1
+            await session.commit()
+    finally:
+        await apify.aclose()
+        await get_engine().dispose()
+    return out

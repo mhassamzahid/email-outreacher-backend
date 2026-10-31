@@ -966,6 +966,13 @@ class ProviderCallRepo:
         )
         await self.session.commit()
 
+    async def apify_runs_since(self, since: datetime) -> list[ProviderCall]:
+        """Apify runs logged since `since`, every workspace, whose cost may still be settling at Apify."""
+        query = select(ProviderCall).where(
+            ProviderCall.provider == "apify", ProviderCall.idempotency_key.like("apify:run:%"), ProviderCall.called_at >= since
+        )
+        return list(await self.session.scalars(query))
+
     async def usage(self, workspace_id: UUID, since: datetime, recent: int = 100) -> dict[str, Any]:
         """Spend since a date: totals per provider, per provider and action, and the latest calls."""
         where = (ProviderCall.workspace_id == workspace_id, ProviderCall.called_at >= since)

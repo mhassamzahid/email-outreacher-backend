@@ -34,7 +34,13 @@ app.conf.update(
             "schedule": float(settings.followup_check_seconds),
             # A check still queued when the next one is due is dropped, so a backlog never piles up.
             "options": {"expires": float(settings.followup_check_seconds)},
-        }
+        },
+        # Apify settles a run's cost a little after it finishes: correct the logged figures (free reads).
+        "apify-costs": {
+            "task": "coldbrew.settle_apify_costs",
+            "schedule": 600.0,
+            "options": {"expires": 600.0},
+        },
     },
 )
 

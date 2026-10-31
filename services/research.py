@@ -33,6 +33,8 @@ class ResearchSummary:
     not_fit: int = 0
     errors: int = 0
     apify_cost_usd: float = 0.0
+    # Each Apify run as (run id, cost), logged one by one so its cost can be corrected once Apify settles it.
+    apify_runs: list[tuple[str | None, float | None]] = field(default_factory=list)
     # What was read, for the caller to store: full page texts and the company's Instagram posts.
     pages: dict[UUID, tuple[str, list[dict]]] = field(default_factory=dict)  # company id -> (via, pages)
     posts: dict[UUID, list[FetchedPost]] = field(default_factory=dict)
@@ -132,6 +134,7 @@ async def research_companies(
         try:
             profiles, run = await apify.instagram_profiles(list(handles.values()))
             summary.apify_cost_usd += run.cost_usd or 0
+            summary.apify_runs.append((run.run_id, run.cost_usd))
             # A stored handle Instagram doesn't know (renamed, or wrong where it came from): try the
             # account the company's own website links to, when that's a different one.
             retry = {}
@@ -142,6 +145,7 @@ async def research_companies(
             if retry:
                 more, run = await apify.instagram_profiles(list(retry.values()))
                 summary.apify_cost_usd += run.cost_usd or 0
+                summary.apify_runs.append((run.run_id, run.cost_usd))
                 profiles.update(more)
                 for company in companies:
                     if company.id in retry and retry[company.id] in more:

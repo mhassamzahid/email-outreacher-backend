@@ -304,10 +304,11 @@ async def research(
             await companies.save_pages(workspace_id, company_id, via, pages)
         for company_id, found in summary.posts.items():
             await posts.save_company(workspace_id, company_id, found)
-        if summary.apify_cost_usd:
+        for run_id, run_cost in summary.apify_runs:
             await calls.record(
-                workspace_id, "apify", INSTAGRAM_PROFILE_ACTOR, "succeeded", cost_usd=summary.apify_cost_usd, action="Research companies"
-            )
+                workspace_id, "apify", INSTAGRAM_PROFILE_ACTOR, "succeeded",
+                key=f"apify:run:{run_id}" if run_id else None, cost_usd=run_cost, action="Research companies",
+            )  # fmt: skip
         if summary.claude_calls:
             cost = cost_usd(summary.claude_model or settings.claude_scoring_model, summary.input_tokens, summary.output_tokens)
             await calls.record(
@@ -411,7 +412,10 @@ async def find_stakeholders(
             else:
                 people, run = await apify.company_employees(c.linkedin_url or c.name, titles, body.max_per_company)  # type: ignore[union-attr]
                 cost += run.cost_usd or 0
-                await calls.record(workspace_id, "apify", EMPLOYEES_ACTOR, "succeeded", cost_usd=run.cost_usd, action="Find stakeholders")
+                await calls.record(
+                    workspace_id, "apify", EMPLOYEES_ACTOR, "succeeded",
+                    key=f"apify:run:{run.run_id}" if run.run_id else None, cost_usd=run.cost_usd, action="Find stakeholders",
+                )  # fmt: skip
                 for p in people:
                     p.company_name = p.company_name or c.name
                 new = await stakeholders.save_employees(

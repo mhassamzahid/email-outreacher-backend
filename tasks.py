@@ -47,6 +47,14 @@ def check_follow_ups() -> dict:
                 pass
 
 
+@app.task(name="coldbrew.settle_apify_costs")
+def settle_apify_costs() -> dict:
+    """Correct recent Apify runs' logged cost to what Apify finally charged (jobs.settle_apify_costs)."""
+    summary = asyncio.run(jobs.settle_apify_costs())
+    log.info("Apify costs: %s", summary)
+    return summary
+
+
 _limit = get_settings().job_time_limit_seconds
 
 
