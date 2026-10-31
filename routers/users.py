@@ -1,10 +1,10 @@
 """Who signs in and what they can open.
 
-Accounts and passwords live in Supabase Auth (made and reset in the Supabase dashboard; there is no
-sign-up). Here: each person's role and workspaces, in `eo_users` and `eo_workspace_members`.
-Anyone with a Supabase account can sign in; on first sign-in they're added as Sales with no
-workspaces, so they see nothing until an admin gives them some. An admin can also add someone by
-email ahead of time, with their role and workspaces ready for their first sign-in.
+Accounts and passwords live in Supabase Auth, shared with Lead Intel, with public sign-up off. An admin
+adds someone here with their role, workspaces and a first password: that makes their sign-in too
+(services/supabase_admin.py), unless the email already has one, which they keep using. Only people added
+here get in (dependencies.get_current_user); a Supabase account on its own isn't enough. Here: each
+person's role and workspaces, in `eo_users` and `eo_workspace_members`.
 
 Removing someone here only removes them from this app. Their Supabase account, which Lead Intel
 shares, is left alone.
@@ -15,8 +15,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from crud import UserRepo
-from dependencies import forget_sign_ins, get_current_user, get_user_repo, require_admin
-from schemas import UserIn, UserOut, UserUpdate
+from dependencies import forget_sign_ins, get_current_user, get_supabase_admin, get_user_repo, require_admin
+from schemas import UserAdded, UserIn, UserOut, UserUpdate
+from services.supabase_admin import SupabaseAdmin, SupabaseAdminError
 from services.auth import CurrentUser
 
 router = APIRouter(tags=["users"])
@@ -45,15 +46,32 @@ async def list_users(_: CurrentUser = Depends(require_admin), users: UserRepo = 
     return [_out(u, members.get(u.id, [])) for u in await users.list()]
 
 
-@router.post("/users", response_model=UserOut, status_code=201)
-async def add_user(body: UserIn, _: CurrentUser = Depends(require_admin), users: UserRepo = Depends(get_user_repo)) -> UserOut:
-    """Add someone by email before they first sign in. Their Supabase account is made separately, in
-    the Supabase dashboard."""
+@router.post("/users", response_model=UserAdded, status_code=201)
+async def add_user(
+    body: UserIn,
+    _: CurrentUser = Depends(require_admin),
+    users: UserRepo = Depends(get_user_repo),
+    supabase: SupabaseAdmin | None = Depends(get_supabase_admin),
+) -> UserAdded:
+    """Add someone with their role and workspaces, and make their sign-in with the password given. An email
+    that already has a sign-in (from Lead Intel) keeps it, and its own password."""
     email = body.email.strip().lower()
     if await users.by_email(email):
         raise HTTPException(status_code=409, detail="Someone with this email is already a user.")
-    user = await users.create(body.name.strip() or email.split("@")[0], email, body.role, body.workspace_ids)
-    return _out(user, body.workspace_ids)
+    if supabase is None:
+        raise HTTPException(status_code=503, detail="SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set to make sign-ins.")
+    try:
+        auth_id = await supabase.create_user(email, body.password)
+    except SupabaseAdminError as exc:
+        raise HTTPException(status_code=502 if (exc.status or 500) >= 500 else 422, detail=exc.message) from exc
+    try:
+        user = await users.create(body.name.strip() or email.split("@")[0], email, body.role, body.workspace_ids, auth_user_id=auth_id)
+    except Exception:
+        if auth_id:
+            await supabase.delete_user(auth_id)  # no half-made person: the sign-in goes too
+        raise
+    out = _out(user, body.workspace_ids).model_dump()
+    return UserAdded(**out, sign_in="created" if auth_id else "existing")
 
 
 @router.patch("/users/{user_id}", response_model=UserOut)

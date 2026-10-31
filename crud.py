@@ -661,8 +661,8 @@ class UserRepo:
             await self.session.refresh(user)
         return user
 
-    async def create(self, name: str, email: str, role: str, workspace_ids: list[UUID]) -> User:
-        user = User(name=name, email=email.strip().lower(), role=role, status="invited")
+    async def create(self, name: str, email: str, role: str, workspace_ids: list[UUID], auth_user_id: UUID | None = None) -> User:
+        user = User(name=name, email=email.strip().lower(), role=role, status="invited", auth_user_id=auth_user_id)
         self.session.add(user)
         await self.session.flush()
         await self._set_workspaces(user.id, workspace_ids)

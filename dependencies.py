@@ -35,6 +35,7 @@ from database import get_lead_intel_icp_conn, get_readonly_conn, get_session
 from lead_intel import LeadIntelRepo
 from lead_intel_writes import LeadIntelIcpWriter
 from services.apify import ApifyClient
+from services.supabase_admin import SupabaseAdmin
 from services.apollo import ApolloClient
 from services.auth import AuthError, CurrentUser, verify
 from services.generation import EmailWriter
@@ -318,6 +319,17 @@ async def get_optional_apify() -> AsyncIterator[ApifyClient | None]:
 async def get_optional_places() -> AsyncIterator[PlacesClient | None]:
     key = get_settings().google_places_api_key
     client = PlacesClient(key, endpoint=get_settings().google_places_url) if key else None
+    try:
+        yield client
+    finally:
+        if client:
+            await client.aclose()
+
+
+async def get_supabase_admin() -> AsyncIterator[SupabaseAdmin | None]:
+    settings = get_settings()
+    ready = settings.supabase_url and settings.supabase_service_role_key
+    client = SupabaseAdmin(settings.supabase_url, settings.supabase_service_role_key) if ready else None  # type: ignore[arg-type]
     try:
         yield client
     finally:

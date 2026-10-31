@@ -605,6 +605,9 @@ class UserIn(ApiModel):
     email: str = Field(pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$", max_length=254)
     role: UserRole = "sales"
     workspace_ids: list[UUID] = Field(default=[], max_length=100)
+    # Their first password, which the admin passes on. Unused when the email already has a sign-in
+    # (shared with Lead Intel): that one keeps its own password.
+    password: str = Field(min_length=12, max_length=72)
 
 
 class UserUpdate(ApiModel):
@@ -624,6 +627,12 @@ class UserOut(ApiModel):
     workspace_ids: list[UUID]
     last_active_at: datetime | None
     created_at: datetime
+
+
+class UserAdded(UserOut):
+    # created: a new sign-in with the password given. existing: the email already had one (shared with
+    # Lead Intel), which they keep using, password and all.
+    sign_in: Literal["created", "existing"]
 
 
 # ---------- Stakeholders (Apollo) ----------

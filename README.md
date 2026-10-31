@@ -64,9 +64,12 @@ Check the connection and that Lead Intel still has every column we read:
 
 ## Sign-in
 
-Supabase Auth, email and password. There's no sign-up: accounts are made, and passwords reset, in the
-Supabase dashboard (Authentication > Users). Signed in, anyone can change their own password from the
-sidebar. It's the shared Supabase account, so the change applies to Lead Intel too.
+Supabase Auth, email and password, shared with Lead Intel. Public sign-up is off (Supabase → Authentication →
+Sign In / Providers → Allow new users to sign up): otherwise anyone could make an account. Admins add people on
+the Users page with a first password, which makes their sign-in through Supabase's admin API
+(`services/supabase_admin.py`, with `SUPABASE_SERVICE_ROLE_KEY`); someone who already signs in to Lead Intel keeps
+that sign-in and its password. Signed in, anyone can change their own password from the sidebar; it's the
+shared account, so the change applies to Lead Intel too.
 
 Every route except health is only for Coldbrew's own frontend server. It must send `X-Coldbrew-Secret`
 matching `API_SECRET` (with no `API_SECRET` set, the API refuses everything), and a request carrying an
@@ -75,8 +78,8 @@ the frontend's `app/api/v1` route forwards each call and adds the secret on its 
 
 Then it needs `Authorization: Bearer <Supabase access token>`, checked against the
 project's public keys (`SUPABASE_JWKS_URL`, or the standard address under `SUPABASE_URL`). Supabase Auth
-is shared with Lead Intel, so any account there can sign in; what it can do here comes from
-`eo_users`: a first sign-in is added as Sales with no workspaces until an admin gives them some.
+is shared with Lead Intel, but only accounts an admin added here get in (`eo_users`, linked by email on their
+first sign-in); any other account is refused.
 Admins open every workspace and manage users and workspaces; Management and admins can change ICPs.
 
 ## Endpoints (v1)
@@ -97,7 +100,7 @@ Admins open every workspace and manage users and workspaces; Management and admi
 | GET | `/api/v1/sending/replies/{threadId}` | One conversation with every message, oldest first |
 | POST | `/api/v1/webhooks/cheapsequencer` | CheapSequencer's reply, bounce and unsubscribe events. No sign-in: checked by signature (see Reply webhooks) |
 | GET | `/api/v1/me` | The signed-in person: role, status and workspaces |
-| GET/POST | `/api/v1/users` | Admins: everyone; add someone by email with a role and workspaces, ready for their first sign-in |
+| GET/POST | `/api/v1/users` | Admins: everyone; add someone with a role, workspaces and a first password, which also makes their Supabase sign-in (`signIn`: created, or existing for a Lead Intel sign-in, which keeps its password) |
 | PATCH/DELETE | `/api/v1/users/{id}` | Admins: change role, status or workspaces; remove from this app (their Supabase account stays). The last active admin can't be lost |
 | GET | `/api/v1/workspaces` | The workspaces the signed-in person can open |
 | PUT | `/api/v1/workspaces/{id}/members` | Admins: exactly who can open it |
